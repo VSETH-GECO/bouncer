@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/VSETH-GECO/bouncer/pkg/database"
 	"flag"
+	"github.com/VSETH-GECO/bouncer/pkg/database"
 )
 
 func main() {

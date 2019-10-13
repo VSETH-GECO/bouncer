@@ -225,10 +225,10 @@ func AssetNames() []string {
 // _bindata is a table, holding each asset generator, mapped to its name.
 var _bindata = map[string]func() (*asset, error){
 	"000001_add_jobs.down.sql": _000001_add_jobsDownSql,
-	"000001_add_jobs.up.sql": _000001_add_jobsUpSql,
-	"000002_add_log.down.sql": _000002_add_logDownSql,
-	"000002_add_log.up.sql": _000002_add_logUpSql,
-	"bindata.go": bindataGo,
+	"000001_add_jobs.up.sql":   _000001_add_jobsUpSql,
+	"000002_add_log.down.sql":  _000002_add_logDownSql,
+	"000002_add_log.up.sql":    _000002_add_logUpSql,
+	"bindata.go":               bindataGo,
 }
 
 // AssetDir returns the file names below a certain
@@ -270,12 +270,13 @@ type bintree struct {
 	Func     func() (*asset, error)
 	Children map[string]*bintree
 }
+
 var _bintree = &bintree{nil, map[string]*bintree{
 	"000001_add_jobs.down.sql": &bintree{_000001_add_jobsDownSql, map[string]*bintree{}},
-	"000001_add_jobs.up.sql": &bintree{_000001_add_jobsUpSql, map[string]*bintree{}},
-	"000002_add_log.down.sql": &bintree{_000002_add_logDownSql, map[string]*bintree{}},
-	"000002_add_log.up.sql": &bintree{_000002_add_logUpSql, map[string]*bintree{}},
-	"bindata.go": &bintree{bindataGo, map[string]*bintree{}},
+	"000001_add_jobs.up.sql":   &bintree{_000001_add_jobsUpSql, map[string]*bintree{}},
+	"000002_add_log.down.sql":  &bintree{_000002_add_logDownSql, map[string]*bintree{}},
+	"000002_add_log.up.sql":    &bintree{_000002_add_logUpSql, map[string]*bintree{}},
+	"bindata.go":               &bintree{bindataGo, map[string]*bintree{}},
 }}
 
 // RestoreAsset restores an asset under the given directory
@@ -324,4 +325,3 @@ func _filePath(dir, name string) string {
 	cannonicalName := strings.Replace(name, "\\", "/", -1)
 	return filepath.Join(append([]string{dir}, strings.Split(cannonicalName, "/")...)...)
 }
-

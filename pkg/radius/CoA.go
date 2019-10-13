@@ -7,22 +7,22 @@ import (
 	"time"
 )
 
-// Encapsulates all data needed for a RADIUS CoA request
+// CoARequest encapsulates all data needed for a RADIUS CoA request
 type CoARequest struct {
-	SessionUid       string
+	SessionUID       string
 	SessionStartDate time.Time
 	SwitchIP         net.IP
 	SwitchSecret     []byte
 }
 
-// Send off the request to the switch. This uses a cisco-specific extension to toggle the port.
+// SendDisconnect sends off the request to the switch. This uses a cisco-specific extension to toggle the port.
 func (c *CoARequest) SendDisconnect() error {
 	client := radius.Client{
 		Retries: 2,
-		Timeout: 200*time.Millisecond,
+		Timeout: 200 * time.Millisecond,
 	}
 	request := radius.New(radius.CodeCoARequest, c.SwitchSecret)
-	err := request.Add("Acct-Session-Id", c.SessionUid)
+	err := request.Add("Acct-Session-Id", c.SessionUID)
 	if err != nil {
 		return err
 	}
@@ -45,7 +45,7 @@ func (c *CoARequest) SendDisconnect() error {
 	}
 
 	dest := net.UDPAddr{
-		IP: c.SwitchIP,
+		IP:   c.SwitchIP,
 		Port: 3799,
 	}
 	result, err := client.Exchange(request, &dest, nil)
