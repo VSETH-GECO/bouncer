@@ -10,6 +10,8 @@ import (
 	"github.com/golang-migrate/migrate"
 	mysqlDriver "github.com/golang-migrate/migrate/database/mysql"
 	bindata "github.com/golang-migrate/migrate/source/go_bindata"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"net"
@@ -17,6 +19,29 @@ import (
 	"strconv"
 	"strings"
 	"time"
+)
+
+var (
+	opsProcessed = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bouncer_processed_requests",
+		Help: "The total number of processed requests",
+	})
+	opsProcessedSuccessfully = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bouncer_processed_requests_success",
+		Help: "The total number of successfully processed requests",
+	})
+	opsProcessedUseless = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bouncer_processed_useless_requests",
+		Help: "The total number of requests without any effect",
+	})
+	opsProcessedNewUser = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bouncer_processed_requests_new",
+		Help: "The total number of requests with new users",
+	})
+	opsFailedCoA = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bouncer_failed_coa",
+		Help: "The total number of failed CoA requests",
+	})
 )
 
 // Session describes details of a (running) RADIUS Session
@@ -153,6 +178,13 @@ func (h *Handler) Migrate(force int) error {
 	return nil
 }
 
+// addNewUser adds a new user for a host
+func (h *Handler) addNewUser(tx *sql.Tx, id int, clientMac string, targetVLAN int) error {
+	opsProcessedNewUser.Inc()
+	_, err := tx.Exec("INSERT INTO radreply(username, attribute, op, value) VALUES(?, 'Tunnel-Private-Group-ID', ':=', ?)", clientMac, strconv.Itoa(targetVLAN))
+	return err
+}
+
 // moveHostToVLAN moves a host between VLANs, taking care of all database updates
 func (h *Handler) moveHostToVLAN(id int, clientMac string, targetVLAN int) error {
 	// Let's see whether this host can actually be found
@@ -160,9 +192,7 @@ func (h *Handler) moveHostToVLAN(id int, clientMac string, targetVLAN int) error
 	if err != nil {
 		return err
 	}
-	if val == nil {
-		return errors.New("no Session for MAC found")
-	}
+	noRunningSession := val == nil
 	tx, err := h.connection.Begin()
 	if err != nil {
 		return err
@@ -178,50 +208,59 @@ func (h *Handler) moveHostToVLAN(id int, clientMac string, targetVLAN int) error
 		res.Close()
 		return err
 	}
+	oldVlan := -1
 	if !res.Next() {
+		// No entry found - this user is completely new
 		res.Close()
-		return errors.New("no login for MAC found")
-	}
-	var oldVlanStr string
-	err = res.Scan(&oldVlanStr)
-	res.Close()
-	if err != nil {
-		return err
-	}
-	oldVlan, err := strconv.Atoi(oldVlanStr)
-	if err != nil {
-		return err
+		err = h.addNewUser(tx, id, clientMac, targetVLAN)
+		if err != nil {
+			return err
+		}
+	} else {
+		// We found an entry -> update it
+		var oldVlanStr string
+		err = res.Scan(&oldVlanStr)
+		res.Close()
+		if err != nil {
+			return err
+		}
+		oldVlan, err = strconv.Atoi(oldVlanStr)
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.Exec("UPDATE radreply SET value = ? WHERE attribute = 'Tunnel-Private-Group-ID' AND username = ?", strconv.Itoa(targetVLAN), strings.ToLower(clientMac))
+		if err != nil {
+			return err
+		}
 	}
 
+	// I'm not sure if you want this, so let's log that case
 	if oldVlan == targetVLAN {
 		log.WithFields(log.Fields{
 			"id":         id,
 			"clientMAC":  clientMac,
 			"targetVLAN": targetVLAN,
 		}).Warn("Got request to move to same vlan, silently discarding this ;-)")
+		tx.Commit()
+		opsProcessedSuccessfully.Inc()
+		opsProcessedUseless.Inc()
 		return nil
 	}
 
-	_, err = tx.Exec("UPDATE radreply SET value = ? WHERE attribute = 'Tunnel-Private-Group-ID' AND username = ?", strconv.Itoa(targetVLAN), strings.ToLower(clientMac))
-	if err != nil {
-		return err
-	}
-
-	_, err = tx.Exec("INSERT INTO bouncer_log(clientMAC, oldVLAN, newVLAN, switchIP, switchPort) VALUES(?, ?, ?, ?, ?)",
-		strings.ToLower(clientMac), strconv.Itoa(oldVlan), strconv.Itoa(targetVLAN), val.switchIP, val.switchPort)
-	if err != nil {
-		return err
-	}
-
-	request := radius.CoARequest{
-		SessionUID:       val.uid,
-		SessionStartDate: val.startDate.Time,
-		SwitchIP:         net.ParseIP(val.switchIP),
-		SwitchSecret:     []byte(h.switchSecret),
-	}
-	err = request.SendDisconnect()
-	if err != nil {
-		return err
+	// If there is a running session, force the switch to reauth
+	if !noRunningSession {
+		request := radius.CoARequest{
+			SessionUID:       val.uid,
+			SessionStartDate: val.startDate.Time,
+			SwitchIP:         net.ParseIP(val.switchIP),
+			SwitchSecret:     []byte(h.switchSecret),
+		}
+		err = request.SendDisconnect()
+		if err != nil {
+			opsFailedCoA.Inc()
+			return err
+		}
 	}
 	log.WithFields(log.Fields{
 		"id":         id,
@@ -229,10 +268,19 @@ func (h *Handler) moveHostToVLAN(id int, clientMac string, targetVLAN int) error
 		"oldVLAN":    oldVlan,
 		"targetVLAN": targetVLAN,
 	}).Info("VLAN move successful")
+
+	// Also log success to database
+	_, err = tx.Exec("INSERT INTO bouncer_log(clientMAC, oldVLAN, newVLAN, switchIP, switchPort) VALUES(?, ?, ?, ?, ?)",
+		strings.ToLower(clientMac), strconv.Itoa(oldVlan), strconv.Itoa(targetVLAN), val.switchIP, val.switchPort)
+	if err != nil {
+		return err
+	}
+
 	err = tx.Commit()
 	if err != nil {
 		return err
 	}
+	opsProcessedSuccessfully.Add(1)
 	return nil
 }
 
@@ -270,6 +318,7 @@ func (h *Handler) work() error {
 			"clientMAC":  obj.clientMac,
 			"targetVLAN": obj.targetVLAN,
 		}).Info("Processing")
+		opsProcessed.Add(1)
 		err = h.moveHostToVLAN(obj.id, obj.clientMac, obj.targetVLAN)
 		if err != nil {
 			return err
