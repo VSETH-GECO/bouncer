@@ -87,7 +87,6 @@ func (p *PrometheusHandler) getTwoIntValWithSQL(query string, handler func(int, 
 	}
 }
 
-
 func (p *PrometheusHandler) getStringIntValWithSQL(query string, handler func(string, int)) {
 	res, err := p.handler.connection.Query(query)
 	if err != nil {

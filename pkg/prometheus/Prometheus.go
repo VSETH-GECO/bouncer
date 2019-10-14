@@ -12,7 +12,7 @@ func StartServing(port int, handler *database.Handler) {
 	go database.StartUpdating(handler)
 
 	http.Handle("/metrics", promhttp.Handler())
-	err := http.ListenAndServe("127.0.0.1:" + strconv.Itoa(port), nil)
+	err := http.ListenAndServe("127.0.0.1:"+strconv.Itoa(port), nil)
 	if err != nil {
 		log.WithError(err).Fatal("Couldn't start prometheus handler")
 	}

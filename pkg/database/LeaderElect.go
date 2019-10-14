@@ -14,7 +14,7 @@ import (
 // LeaderElect provides a poor man's leader election based on our shared SQL database
 type LeaderElect struct {
 	connection *Handler
-	nodeID string
+	nodeID     string
 }
 
 // CreateLeaderElect prepares a new leader election object, using a combination of hostname and pid as unique id
@@ -79,14 +79,14 @@ func (l *LeaderElect) Refresh(lock int, connection *sql.DB) (err error) {
 	return
 }
 
-func (l* LeaderElect) updateOrDie(lock int) {
+func (l *LeaderElect) updateOrDie(lock int) {
 	myConnection := CopyHandler(l.connection)
 	for {
 		err := l.Refresh(lock, myConnection.connection)
 		if err != nil {
 			log.WithError(err).Fatal("Error updating log time!")
 		}
-		time.Sleep(time.Duration(15 + rand.Intn(5)) * time.Second)
+		time.Sleep(time.Duration(15+rand.Intn(5)) * time.Second)
 
 		// Sanity check
 		result, err := myConnection.connection.Query("SELECT nodeid FROM bouncer_election WHERE id=?", lock)
@@ -104,14 +104,14 @@ func (l* LeaderElect) updateOrDie(lock int) {
 		}
 		if actualNodeID != l.nodeID {
 			log.WithFields(log.Fields{
-				"nodeID": l.nodeID,
+				"nodeID":       l.nodeID,
 				"actualNodeID": actualNodeID,
 			}).Fatal("Lost leader lock, aborting!")
 		}
 	}
 }
 
-func (l* LeaderElect) releaseLockOnShutdown(lock int) {
+func (l *LeaderElect) releaseLockOnShutdown(lock int) {
 	myConnection := CopyHandler(l.connection)
 
 	handler := func() {
@@ -155,17 +155,17 @@ func (l *LeaderElect) EnsureLock(lock int) {
 		}
 		if err != nil {
 			log.WithError(err).WithFields(log.Fields{
-				"haveLock": haveLock,
-				"id": lock,
+				"haveLock":   haveLock,
+				"id":         lock,
 				"leaderName": leaderName,
 			}).Warn("Didn't acquire lock")
 		} else {
 			log.WithFields(log.Fields{
-				"haveLock": haveLock,
-				"id": lock,
+				"haveLock":   haveLock,
+				"id":         lock,
 				"leaderName": leaderName,
 			}).Debug("Didn't acquire lock")
 		}
-		time.Sleep(time.Duration(15 + rand.Intn(15)) * time.Second)
+		time.Sleep(time.Duration(15+rand.Intn(15)) * time.Second)
 	}
 }

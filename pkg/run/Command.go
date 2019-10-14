@@ -9,9 +9,9 @@ import (
 )
 
 var (
-	leaderElect   bool
-	switchSecret  string
-	usePrometheus bool
+	leaderElect    bool
+	switchSecret   string
+	usePrometheus  bool
 	prometheusPort int
 )
 

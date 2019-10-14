@@ -66,11 +66,11 @@ type Handler struct {
 // CreateHandler instantiates a new handler
 func CreateHandler(host string, port int, user string, password string, database string, switchSecret string) *Handler {
 	obj := Handler{
-		host: host,
-		port: port,
-		user: user,
-		password: password,
-		database: database,
+		host:         host,
+		port:         port,
+		user:         user,
+		password:     password,
+		database:     database,
 		switchSecret: switchSecret,
 	}
 	return &obj
@@ -89,11 +89,11 @@ func CreateHandlerFromConfig() *Handler {
 // CopyHandler instantiates a new handler from an existing one
 func CopyHandler(src *Handler) *Handler {
 	obj := Handler{
-		host: src.host,
-		port: src.port,
-		user: src.user,
-		password: src.password,
-		database: src.database,
+		host:         src.host,
+		port:         src.port,
+		user:         src.user,
+		password:     src.password,
+		database:     src.database,
 		switchSecret: src.switchSecret,
 		// connection is _not_ duplicated
 	}
@@ -327,7 +327,7 @@ func (h *Handler) work() error {
 	return nil
 }
 
-func (h *Handler) CheckDBVersion() (err error){
+func (h *Handler) CheckDBVersion() (err error) {
 	if h.connection == nil {
 		h.Connect()
 	}
@@ -364,8 +364,8 @@ func (h *Handler) CheckDBVersion() (err error){
 	latestVersion, err := strconv.ParseUint(nameParts[0], 10, 16)
 	entry := log.WithFields(log.Fields{
 		"latestVersion": latestVersion,
-		"version": version,
-		"dirty": dirty,
+		"version":       version,
+		"dirty":         dirty,
 	})
 	if uint(latestVersion) == version {
 		entry.Debug("Database version is matching newest version at build time")
