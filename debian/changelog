@@ -1,3 +1,11 @@
+bouncer (0.2) unstable; urgency=medium
+
+  * Add prometheus support
+  * Log IP information on change
+  * Try to remove lease when changing the VLAN
+
+ -- Maximilian Falkenstein <maximilian.falkenstein@sos.ethz.ch>  Mon, 14 Oct 2019 22:51:34 +0200
+
 bouncer (0.1) unstable; urgency=medium
 
   * Initial release

@@ -262,16 +262,40 @@ func (h *Handler) moveHostToVLAN(id int, clientMac string, targetVLAN int) error
 			return err
 		}
 	}
+
+	// Fetch IP-related information from the DHCP database
+	ip := ""
+	hostname := ""
+	ipRes, err := tx.Query("SELECT hostname,INET_NTOA(address) FROM lease4 WHERE hwaddr = UNHEX(?);", clientMac)
+	if err != nil {
+		// Do not return, we already sent the CoA which cannot be undone!
+		log.WithError(err).Warn("Couldn't fetch IP information")
+	} else {
+		if ipRes.Next() {
+			err = ipRes.Scan(&hostname, &ip)
+			if err != nil {
+				log.WithError(err).Warn("Couldn't decode IP information")
+			}
+		}
+		ipRes.Close()
+	}
+	_, err = tx.Exec("DELETE FROM lease4 WHERE hwaddr = UNHEX(?);", clientMac)
+	if err != nil {
+		log.WithError(err).Warn("Couldn't remove IP information")
+	}
+
 	log.WithFields(log.Fields{
 		"id":         id,
 		"clientMAC":  clientMac,
 		"oldVLAN":    oldVlan,
 		"targetVLAN": targetVLAN,
+		"oldIP":      ip,
+		"hostname":   hostname,
 	}).Info("VLAN move successful")
 
 	// Also log success to database
-	_, err = tx.Exec("INSERT INTO bouncer_log(clientMAC, oldVLAN, newVLAN, switchIP, switchPort) VALUES(?, ?, ?, ?, ?)",
-		strings.ToLower(clientMac), strconv.Itoa(oldVlan), strconv.Itoa(targetVLAN), val.switchIP, val.switchPort)
+	_, err = tx.Exec("INSERT INTO bouncer_log(clientMAC, oldVLAN, newVLAN, switchIP, switchPort, clientName, clientIP) VALUES(?, ?, ?, ?, ?, ?, ?)",
+		strings.ToLower(clientMac), strconv.Itoa(oldVlan), strconv.Itoa(targetVLAN), val.switchIP, val.switchPort, hostname, ip)
 	if err != nil {
 		return err
 	}
@@ -327,6 +351,7 @@ func (h *Handler) work() error {
 	return nil
 }
 
+// CheckDBVersion ensures that we're running with the right database version
 func (h *Handler) CheckDBVersion() (err error) {
 	if h.connection == nil {
 		h.Connect()

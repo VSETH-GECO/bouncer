@@ -19,7 +19,7 @@ Insert a client's MAC and it's target VLAN into this table and bouncer will
  * Find the client's RADIUS settings and update them to the new VLAN
  * Figure out the current running RADIUS session it belongs to
  * Send a CoA to the respective switch
- 
+
 At the moment, we use Cisco's proprietary `AVPair` command, so the switch port will
 _physically_ toggle, therefore the client will also fetch a new DHCP lease if needed!
 
@@ -43,5 +43,5 @@ dpkg-buildpackage -b -us -uc
 
 Binary only:
 ```
-go build github.com/VSETH-GECO/bouncer/cmd/bouncer
+go build -o bouncer github.com/VSETH-GECO/bouncer/cmd
 ```

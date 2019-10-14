@@ -26,7 +26,9 @@ func (c *CoARequest) SendDisconnect() error {
 	if err != nil {
 		return err
 	}
-	err = request.Dictionary.Register("Event-Timestamp", 55, radius.AttributeTime)
+	if _, ok := request.Dictionary.Type("Event-Timestamp"); !ok {
+		err = request.Dictionary.Register("Event-Timestamp", 55, radius.AttributeTime)
+	}
 	if err != nil {
 		return err
 	}
