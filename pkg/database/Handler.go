@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"database/sql"
 	"errors"
-	"flag"
 	"github.com/VSETH-GECO/bouncer/migrations"
 	"github.com/VSETH-GECO/bouncer/pkg/radius"
 	"github.com/go-sql-driver/mysql"
@@ -12,7 +11,9 @@ import (
 	mysqlDriver "github.com/golang-migrate/migrate/database/mysql"
 	bindata "github.com/golang-migrate/migrate/source/go_bindata"
 	log "github.com/sirupsen/logrus"
+	"github.com/spf13/viper"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -37,28 +38,53 @@ type Handler struct {
 	switchSecret string
 }
 
-// CreateHandler instanciates a new handler
-func CreateHandler() *Handler {
-	obj := Handler{}
+// CreateHandler instantiates a new handler
+func CreateHandler(host string, port int, user string, password string, database string, switchSecret string) *Handler {
+	obj := Handler{
+		host: host,
+		port: port,
+		user: user,
+		password: password,
+		database: database,
+		switchSecret: switchSecret,
+	}
 	return &obj
 }
 
-// RegisterFlags registers global command-line flags
-func (h *Handler) RegisterFlags() {
-	flag.StringVar(&h.host, "host", "127.0.0.1", "MySQL host")
-	flag.IntVar(&h.port, "port", 3306, "MySQL port")
-	flag.StringVar(&h.user, "user", "radius", "MySQL user")
-	flag.StringVar(&h.password, "password", "foobar", "MySQL password")
-	flag.StringVar(&h.database, "database", "radius", "MySQL database")
-	flag.StringVar(&h.switchSecret, "secret", "", "Switch CoA secret")
+// CreateHandlerFromConfig instantiates a new handler, pulling the values from viper
+func CreateHandlerFromConfig() *Handler {
+	return CreateHandler(viper.GetString("host"),
+		viper.GetInt("port"),
+		viper.GetString("user"),
+		viper.GetString("password"),
+		viper.GetString("database"),
+		viper.GetString("switch-secret"))
 }
 
-// connect to the database
-func (h *Handler) connect() {
+// CopyHandler instantiates a new handler from an existing one
+func CopyHandler(src *Handler) *Handler {
+	obj := Handler{
+		host: src.host,
+		port: src.port,
+		user: src.user,
+		password: src.password,
+		database: src.database,
+		switchSecret: src.switchSecret,
+		// connection is _not_ duplicated
+	}
+	// If src is already connected, also Connect the copy
+	if src.connection != nil {
+		obj.Connect()
+	}
+	return &obj
+}
+
+// Connect to the database
+func (h *Handler) Connect() {
 	var err error
 	h.connection, err = sql.Open("mysql", h.user+":"+h.password+"@tcp("+h.host+":"+strconv.Itoa(h.port)+")/"+h.database)
 	if err != nil {
-		log.WithError(err).Fatal("Couldn't connect to database!")
+		log.WithError(err).Fatal("Couldn't Connect to database!")
 	}
 }
 
@@ -95,7 +121,10 @@ func (h *Handler) FindMACByIP(ip string) (mac string, err error) {
 }
 
 // Migrate updates the database schema to the current version
-func (h *Handler) Migrate() error {
+func (h *Handler) Migrate(force int) error {
+	if h.connection == nil {
+		h.Connect()
+	}
 	s := bindata.Resource(migrations.AssetNames(),
 		func(name string) ([]byte, error) {
 			val, err := migrations.Asset(name)
@@ -113,7 +142,11 @@ func (h *Handler) Migrate() error {
 	if err != nil {
 		return err
 	}
-	err = m.Up()
+	if force == 0 {
+		err = m.Up()
+	} else {
+		err = m.Force(force)
+	}
 	if err != nil && !(err.Error() == "no change") {
 		return err
 	}
@@ -214,7 +247,7 @@ func (h *Handler) work() error {
 		targetVLAN int
 		clientMac  string
 	}
-	list := list.New()
+	entryList := list.New()
 	for res.Next() {
 		obj := work{}
 		err = res.Scan(&obj.id, &obj.clientMac, &obj.targetVLAN)
@@ -226,13 +259,11 @@ func (h *Handler) work() error {
 			"id":         obj.id,
 			"clientMAC":  obj.clientMac,
 			"targetVLAN": obj.targetVLAN,
-		}).Info("New job fetched")
-		list.PushBack(obj)
+		}).Debug("New job fetched")
+		entryList.PushBack(obj)
 	}
 
-	log.Info("Loop A done")
-
-	for ptr := list.Front(); ptr != nil; ptr = ptr.Next() {
+	for ptr := entryList.Front(); ptr != nil; ptr = ptr.Next() {
 		obj := (ptr.Value).(work)
 		log.WithFields(log.Fields{
 			"id":         obj.id,
@@ -247,15 +278,66 @@ func (h *Handler) work() error {
 	return nil
 }
 
+func (h *Handler) CheckDBVersion() (err error){
+	if h.connection == nil {
+		h.Connect()
+	}
+
+	s := bindata.Resource(migrations.AssetNames(),
+		func(name string) ([]byte, error) {
+			val, err := migrations.Asset(name)
+			return val, err
+		})
+	source, err := bindata.WithInstance(s)
+	if err != nil {
+		return
+	}
+	driver, err := mysqlDriver.WithInstance(h.connection, &mysqlDriver.Config{})
+	if err != nil {
+		return
+	}
+	m, err := migrate.NewWithInstance("go-bindata", source, "radius", driver)
+	if err != nil {
+		return
+	}
+	version, dirty, err := m.Version()
+	if err != nil {
+		return
+	}
+	names := s.Names
+	sort.Strings(names)
+	lastMigration := names[len(names)-1]
+	nameParts := strings.Split(lastMigration, "_")
+	if len(nameParts) < 2 {
+		err = errors.New("unexpected string split on resouce name")
+		return
+	}
+	latestVersion, err := strconv.ParseUint(nameParts[0], 10, 16)
+	entry := log.WithFields(log.Fields{
+		"latestVersion": latestVersion,
+		"version": version,
+		"dirty": dirty,
+	})
+	if uint(latestVersion) == version {
+		entry.Debug("Database version is matching newest version at build time")
+	} else if uint(latestVersion) >= version {
+		entry.Fatal("Database version is older than newest version at build time")
+	} else {
+		entry.Warn("Database version is newer than newest version at build time")
+	}
+	if dirty {
+		entry.Warn("Database is marked dirty!")
+	}
+	return
+}
+
 // PollLoop permanently loops over the work queue
 func (h *Handler) PollLoop() {
-	h.connect()
-	log.Info("Migrating database...")
-	err := h.Migrate()
-	if err != nil {
-		log.WithError(err).Fatal("Migrations failed!")
-	}
 	log.Info("Entering main poll loop")
+	if h.connection == nil {
+		h.Connect()
+	}
+
 	for {
 		err := h.work()
 		if err != nil {

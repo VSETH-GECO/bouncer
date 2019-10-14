@@ -1,0 +1,19 @@
+Source: bouncer
+Section: devel
+Priority: extra
+Maintainer: Maximilian Falkenstein <mfalkenstein@sos.ethz.ch>
+Build-Depends: debhelper (>= 10),
+               dh-golang,
+               golang (>= 1.11),
+               dh-exec
+Standards-Version: 3.9.8
+Homepage: https://github.com/VSETH-GECO/bouncer
+Vcs-Browser: https://github.com/VSETH-GECO/bouncer
+Vcs-Git: https://github.com/VSETH-GECO/bouncer.git
+
+Package: bouncer
+Architecture: any
+Built-Using: ${misc:Built-Using}
+Depends: ${shlibs:Depends},
+         ${misc:Depends}
+Description: Cluster router for kubernetes

@@ -1,0 +1,22 @@
+[Unit]
+Description=Bounce switchports on user switches
+After=network.target
+ConditionPathExists=/etc/bouncer/config.yml
+
+[Service]
+ExecStart=/usr/bin/bouncer run
+User=bouncer
+Group=bouncer
+Restart=always
+Type=simple
+LimitFSIZE=0
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=yes
+RemoveIPC=yes
+PrivateDevices=yes
+SupplementaryGroups=adm
+
+[Install]
+WantedBy=multi-user.target

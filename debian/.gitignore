@@ -1,0 +1,10 @@
+autoreconf.after
+autoreconf.before
+*.log
+*.substvars
+tmp
+.debhelper
+debhelper-build-stamp
+files
+*.debhelper
+k8router
