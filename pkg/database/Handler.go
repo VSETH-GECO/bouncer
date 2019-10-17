@@ -117,10 +117,10 @@ func (h *Handler) Connect() {
 func (h *Handler) FindSessionForMAC(mac string) (*Session, error) {
 	obj := Session{}
 	rows, err := h.connection.Query("select acctsessionid, acctstarttime, nasipaddress, nasportid from radacct where username=? and (acctterminatecause='');", mac)
+	defer rows.Close()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	if rows.Next() {
 		err = rows.Scan(&obj.uid, &obj.startDate, &obj.switchIP, &obj.switchPort)
 		if err != nil {
@@ -181,7 +181,19 @@ func (h *Handler) Migrate(force int) error {
 // addNewUser adds a new user for a host
 func (h *Handler) addNewUser(tx *sql.Tx, id int, clientMac string, targetVLAN int) error {
 	opsProcessedNewUser.Inc()
-	_, err := tx.Exec("INSERT INTO radreply(username, attribute, op, value) VALUES(?, 'Tunnel-Private-Group-ID', ':=', ?)", clientMac, strconv.Itoa(targetVLAN))
+	_, err := tx.Exec("INSERT INTO radcheck(username, attribute, op, value) VALUES(?, 'Cleartext-Password', ':=', ?)", clientMac, clientMac)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec("INSERT INTO radreply(username, attribute, op, value) VALUES(?, 'Tunnel-Private-Group-ID', ':=', ?)", clientMac, strconv.Itoa(targetVLAN))
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec("INSERT INTO radreply(username, attribute, op, value) VALUES(?, 'Tunnel-Medium-Type', ':=', 'IEEE-802')", clientMac)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec("INSERT INTO radreply(username, attribute, op, value) VALUES(?, 'Tunnel-Type', ':=', 'VLAN')", clientMac)
 	return err
 }
 
@@ -277,6 +289,8 @@ func (h *Handler) moveHostToVLAN(id int, clientMac string, targetVLAN int) error
 				log.WithError(err).Warn("Couldn't decode IP information")
 			}
 		}
+	}
+	if ipRes != nil {
 		ipRes.Close()
 	}
 	_, err = tx.Exec("DELETE FROM lease4 WHERE hwaddr = UNHEX(?);", clientMac)
@@ -293,9 +307,17 @@ func (h *Handler) moveHostToVLAN(id int, clientMac string, targetVLAN int) error
 		"hostname":   hostname,
 	}).Info("VLAN move successful")
 
+	switchIP := ""
+	switchPort := ""
+
+	if !noRunningSession {
+		switchIP = val.switchIP
+		switchPort = val.switchPort
+	}
+
 	// Also log success to database
 	_, err = tx.Exec("INSERT INTO bouncer_log(clientMAC, oldVLAN, newVLAN, switchIP, switchPort, clientName, clientIP) VALUES(?, ?, ?, ?, ?, ?, ?)",
-		strings.ToLower(clientMac), strconv.Itoa(oldVlan), strconv.Itoa(targetVLAN), val.switchIP, val.switchPort, hostname, ip)
+		strings.ToLower(clientMac), strconv.Itoa(oldVlan), strconv.Itoa(targetVLAN), switchIP, switchPort, hostname, ip)
 	if err != nil {
 		return err
 	}
@@ -334,6 +356,7 @@ func (h *Handler) work() error {
 		}).Debug("New job fetched")
 		entryList.PushBack(obj)
 	}
+	res.Close()
 
 	for ptr := entryList.Front(); ptr != nil; ptr = ptr.Next() {
 		obj := (ptr.Value).(work)
