@@ -178,6 +178,7 @@ func (h *Handler) Migrate(force int) error {
 	return nil
 }
 
+// FindUser tries to find a user by handle from discord
 func (h *Handler) FindUser(value string) (mail string, mac string, vlan string, switchIP string, port string, hostname string, ip string, ok bool, err error) {
 	ok = false
 	res, err := h.connection.Query("SELECT username, mac FROM login_logs WHERE LOWER(username)=LOWER(?) or LOWER(mac)=LOWER(?);", value, value)
@@ -195,33 +196,33 @@ func (h *Handler) FindUser(value string) (mail string, mac string, vlan string, 
 		res.Close()
 
 		// Let's see if we can find the user by hostname instead
-		res, err := h.connection.Query("SELECT HEX(hwaddr) FROM lease4 WHERE hostname = ?;", value)
+		res, err = h.connection.Query("SELECT HEX(hwaddr) FROM lease4 WHERE hostname = ?;", value)
 		if err != nil {
 			return
 		}
 		if res.Next() {
 			err = res.Scan(&mac)
-			res.Close()
+			_ = res.Close()
 			if err != nil {
 				return
 			}
 
-			res, err := h.connection.Query("SELECT username FROM login_logs WHERE LOWER(mac)=LOWER(?);", mac)
+			res, err = h.connection.Query("SELECT username FROM login_logs WHERE LOWER(mac)=LOWER(?);", mac)
 			if err != nil {
 				return
 			}
 			if res.Next() {
 				err = res.Scan(&mail)
-				res.Close()
+				_ = res.Close()
 				if err != nil {
 					return
 				}
 			} else {
-				res.Close()
+				_ = res.Close()
 				return
 			}
 		} else {
-			res.Close()
+			_ = res.Close()
 			return
 		}
 	}
@@ -235,7 +236,7 @@ func (h *Handler) FindUser(value string) (mail string, mac string, vlan string, 
 		return
 	}
 	err = res.Scan(&vlan)
-	res.Close()
+	_ = res.Close()
 	if err != nil {
 		return
 	}

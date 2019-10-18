@@ -1,3 +1,9 @@
+bouncer (0.4) unstable; urgency=medium
+
+  * Discord support
+
+ -- Maximilian Falkenstein <maximilian.falkenstein@sos.ethz.ch>  Fri, 18 Oct 2019 14:59:02 +0200
+
 bouncer (0.3) unstable; urgency=medium
 
   * Lots of bugfixes

@@ -15,6 +15,29 @@ type Discord struct {
 	allowedUsers []string
 }
 
+type discordLogger struct {
+	s *discordgo.Session
+}
+
+func (d *discordLogger) Levels() []log.Level {
+	return []log.Level{
+		log.InfoLevel,
+		log.WarnLevel,
+		log.ErrorLevel,
+		log.FatalLevel,
+		log.PanicLevel,
+	}
+}
+
+func (d *discordLogger) Fire(entry *log.Entry) error {
+	msg, err := entry.String()
+	if err != nil {
+		return err
+	}
+	_, err = d.s.ChannelMessageSend("634738075011907599", msg)
+	return err
+}
+
 // NewDiscord returns a new discord handler
 func NewDiscord(db *database.Handler) *Discord {
 	obj := &Discord{
@@ -47,7 +70,11 @@ func (d *Discord) Setup() {
 		}
 
 		router.On("find", func(ctx *exrouter.Context) {
-			if !isOk(ctx.Msg.Author.Username) {
+			if !isOk(ctx.Msg.Author.ID) {
+				log.WithFields(log.Fields{
+					"id":   ctx.Msg.Author.ID,
+					"name": ctx.Msg.Author.Username,
+				}).Info("Unauthorized access to command blocked")
 				return
 			}
 
@@ -69,22 +96,22 @@ func (d *Discord) Setup() {
 				}
 
 				var msg string
-				if ctx.Msg.ChannelID == "303183210123231243" {
-					msg = fmt.Sprintf("Mail: <removed in public channel>"+
-						"Mac: %s"+
-						"Switch IP: %s"+
-						"Switch Port: %s"+
-						"VLAN: %s"+
-						"Hostname: %s"+
-						"Current IP: %s", mac, switchIP, switchPort, vlan, hostname, ip)
+				if ctx.Msg.ChannelID != "303183210123231243" {
+					msg = fmt.Sprintf("Mail: <removed in public channel>\n"+
+						"Mac: %s\n"+
+						"Switch IP: %s\n"+
+						"Switch Port: %s\n"+
+						"VLAN: %s\n"+
+						"Hostname: %s\n"+
+						"Current IP: %s\n", mac, switchIP, switchPort, vlan, hostname, ip)
 				} else {
-					msg = fmt.Sprintf("Mail: %s"+
-						"Mac: %s"+
-						"Switch IP: %s"+
-						"Switch Port: %s"+
-						"VLAN: %s"+
-						"Hostname: %s"+
-						"Current IP: %s", mail, mac, switchIP, switchPort, vlan, hostname, ip)
+					msg = fmt.Sprintf("Mail: %s\n"+
+						"Mac: %s\n"+
+						"Switch IP: %s\n"+
+						"Switch Port: %s\n"+
+						"VLAN: %s\n"+
+						"Hostname: %s\n"+
+						"Current IP: %s\n", mail, mac, switchIP, switchPort, vlan, hostname, ip)
 				}
 				_, err = ctx.Reply(msg)
 				if err != nil {
@@ -101,6 +128,10 @@ func (d *Discord) Setup() {
 
 		router.On("patch", func(ctx *exrouter.Context) {
 			if !isOk(ctx.Msg.Author.Username) {
+				log.WithFields(log.Fields{
+					"id":   ctx.Msg.Author.ID,
+					"name": ctx.Msg.Author.Username,
+				}).Info("Unauthorized access to command blocked")
 				return
 			}
 
@@ -157,9 +188,14 @@ func (d *Discord) Setup() {
 		if err != nil {
 			log.WithError(err).Warning("Couldn't open discord session")
 		}
-		_, err = discord.ChannelMessageSend("303183210123231243", "I am awake!")
+		_, err = discord.ChannelMessageSend("634738075011907599", "I am awake!")
 		if err != nil {
 			log.WithError(err).Warning("Couldn't send message")
+		} else {
+			// Everything seems good
+			log.AddHook(&discordLogger{
+				s: discord,
+			})
 		}
 	}
 }

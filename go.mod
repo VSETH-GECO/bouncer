@@ -30,5 +30,3 @@ require (
 	google.golang.org/genproto v0.0.0-20190425155659-357c62f0e4bb // indirect
 	gotest.tools v2.2.0+incompatible // indirect
 )
-
-go 1.13
