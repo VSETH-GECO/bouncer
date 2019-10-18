@@ -2,6 +2,7 @@ package run
 
 import (
 	"github.com/VSETH-GECO/bouncer/pkg/database"
+	"github.com/VSETH-GECO/bouncer/pkg/discord"
 	"github.com/VSETH-GECO/bouncer/pkg/prometheus"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
@@ -15,6 +16,7 @@ var (
 	prometheusPort int
 )
 
+// RegisterArguments registers this command's arguments
 func RegisterArguments(flags *pflag.FlagSet) {
 	flags.BoolVarP(&leaderElect, "leader-elect", "l", true, "Use leader-election via SQL database")
 	_ = viper.BindPFlag("leader-elect", flags.Lookup("leader-elect"))
@@ -26,7 +28,8 @@ func RegisterArguments(flags *pflag.FlagSet) {
 	_ = viper.BindPFlag("prometheusPort", flags.Lookup("prometheusPort"))
 }
 
-func RunCommand() {
+// ExecCommand executes the main loop
+func ExecCommand() {
 	dbHandler := database.CreateHandlerFromConfig()
 
 	err := dbHandler.CheckDBVersion()
@@ -44,5 +47,7 @@ func RunCommand() {
 		go prometheus.StartServing(viper.GetInt("prometheusPort"), dbHandler)
 	}
 
+	bot := discord.NewDiscord(dbHandler)
+	bot.Setup()
 	dbHandler.PollLoop()
 }

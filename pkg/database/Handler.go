@@ -116,7 +116,7 @@ func (h *Handler) Connect() {
 // FindSessionForMAC looks up the RADIUS Session for a given client
 func (h *Handler) FindSessionForMAC(mac string) (*Session, error) {
 	obj := Session{}
-	rows, err := h.connection.Query("select acctsessionid, acctstarttime, nasipaddress, nasportid from radacct where username=? and (acctterminatecause='');", mac)
+	rows, err := h.connection.Query("select acctsessionid, acctstarttime, nasipaddress, nasportid from radacct where username=? and (acctterminatecause='') order by acctsessionid desc limit 1;", mac)
 	defer rows.Close()
 	if err != nil {
 		return nil, err
@@ -199,6 +199,7 @@ func (h *Handler) addNewUser(tx *sql.Tx, id int, clientMac string, targetVLAN in
 
 // moveHostToVLAN moves a host between VLANs, taking care of all database updates
 func (h *Handler) moveHostToVLAN(id int, clientMac string, targetVLAN int) error {
+	clientMac = strings.ToLower(clientMac)
 	// Let's see whether this host can actually be found
 	val, err := h.FindSessionForMAC(clientMac)
 	if err != nil {

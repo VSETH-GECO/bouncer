@@ -17,6 +17,8 @@ type Options struct {
 	DBUser         string
 	DBPassword     string
 	DBDatabase     string
+	DiscordToken   string
+	DiscordUsers   []string
 }
 
 var (
@@ -38,7 +40,7 @@ var ServeCmd = &cobra.Command{
 	Use:     "run starts the bouncer daemon",
 	Aliases: []string{"run"},
 	Run: func(cmd *cobra.Command, args []string) {
-		run.RunCommand()
+		run.ExecCommand()
 	},
 }
 
@@ -83,7 +85,11 @@ func SetupCommands() {
 	flags.StringVar(&CurrentOptions.DBUser, "user", "", "Database user")
 	_ = viper.BindPFlag("user", flags.Lookup("user"))
 	flags.StringVar(&CurrentOptions.DBPassword, "password", "", "Database password")
-	_ = viper.BindPFlag("password", flags.Lookup("password"))
+	_ = viper.BindPFlag("dtoken", flags.Lookup("dtoken"))
+	flags.StringVar(&CurrentOptions.DiscordToken, "dtoken", "", "Discord bot token")
+	_ = viper.BindPFlag("dtoken", flags.Lookup("dtoken"))
+	flags.StringArrayVar(&CurrentOptions.DiscordUsers, "dusers", []string{}, "Discord bot user whitelist")
+	_ = viper.BindPFlag("dusers", flags.Lookup("dusers"))
 	flags.StringVar(&CurrentOptions.ConfigLocation, "config", "", "Extra config file location to check first")
 	// config is not bound to viper!
 

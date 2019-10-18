@@ -3,7 +3,9 @@ module github.com/VSETH-GECO/bouncer
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20170929234023-d6e3b3328b78 // indirect
 	github.com/Microsoft/go-winio v0.4.11 // indirect
+	github.com/Necroforger/dgrouter v0.0.0-20190528143456-040421b5a83e
 	github.com/blind-oracle/go-radius v0.0.0-20190117000026-79e8ccc792fb
+	github.com/bwmarrin/discordgo v0.19.0
 	github.com/containerd/containerd v1.2.7 // indirect
 	github.com/docker/distribution v2.7.0+incompatible // indirect
 	github.com/docker/docker v0.7.3-0.20190817195342-4760db040282 // indirect
