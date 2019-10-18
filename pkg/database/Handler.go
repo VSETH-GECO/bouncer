@@ -178,6 +178,92 @@ func (h *Handler) Migrate(force int) error {
 	return nil
 }
 
+func (h *Handler) FindUser(value string) (mail string, mac string, vlan string, switchIP string, port string, hostname string, ip string, ok bool, err error) {
+	ok = false
+	res, err := h.connection.Query("SELECT username, mac FROM login_logs WHERE LOWER(username)=LOWER(?) or LOWER(mac)=LOWER(?);", value, value)
+	if err != nil {
+		return
+	}
+
+	if res.Next() {
+		err = res.Scan(&mail, &mac)
+		res.Close()
+		if err != nil {
+			return
+		}
+	} else {
+		res.Close()
+
+		// Let's see if we can find the user by hostname instead
+		res, err := h.connection.Query("SELECT HEX(hwaddr) FROM lease4 WHERE hostname = ?;", value)
+		if err != nil {
+			return
+		}
+		if res.Next() {
+			err = res.Scan(&mac)
+			res.Close()
+			if err != nil {
+				return
+			}
+
+			res, err := h.connection.Query("SELECT username FROM login_logs WHERE LOWER(mac)=LOWER(?);", mac)
+			if err != nil {
+				return
+			}
+			if res.Next() {
+				err = res.Scan(&mail)
+				res.Close()
+				if err != nil {
+					return
+				}
+			} else {
+				res.Close()
+				return
+			}
+		} else {
+			res.Close()
+			return
+		}
+	}
+
+	// Get VLAN
+	res, err = h.connection.Query("SELECT value FROM radreply WHERE attribute='Tunnel-Private-Group-ID' and username=LOWER(?)", mac)
+	if err != nil {
+		return
+	}
+	if !res.Next() {
+		return
+	}
+	err = res.Scan(&vlan)
+	res.Close()
+	if err != nil {
+		return
+	}
+
+	// Get switch info
+	session, err := h.FindSessionForMAC(mac)
+	if err != nil {
+		return
+	}
+	switchIP = session.switchIP
+	port = session.switchPort
+
+	// Get host info
+	val, err := h.connection.Query("SELECT hostname,INET_NTOA(address) FROM lease4 WHERE hwaddr = UNHEX(?);", mac)
+	if err != nil {
+		return
+	}
+	if val.Next() {
+		err = val.Scan(&hostname, &ip)
+		if err != nil {
+			return
+		}
+	}
+
+	ok = true
+	return
+}
+
 // addNewUser adds a new user for a host
 func (h *Handler) addNewUser(tx *sql.Tx, id int, clientMac string, targetVLAN int) error {
 	opsProcessedNewUser.Inc()
@@ -197,8 +283,8 @@ func (h *Handler) addNewUser(tx *sql.Tx, id int, clientMac string, targetVLAN in
 	return err
 }
 
-// moveHostToVLAN moves a host between VLANs, taking care of all database updates
-func (h *Handler) moveHostToVLAN(id int, clientMac string, targetVLAN int) error {
+// MoveHostToVLAN moves a host between VLANs, taking care of all database updates
+func (h *Handler) MoveHostToVLAN(id int, clientMac string, targetVLAN int) error {
 	clientMac = strings.ToLower(clientMac)
 	// Let's see whether this host can actually be found
 	val, err := h.FindSessionForMAC(clientMac)
@@ -211,9 +297,11 @@ func (h *Handler) moveHostToVLAN(id int, clientMac string, targetVLAN int) error
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.Exec("DELETE FROM bouncer_jobs WHERE id=?", id)
-	if err != nil {
-		return err
+	if id != -1 {
+		_, err = tx.Exec("DELETE FROM bouncer_jobs WHERE id=?", id)
+		if err != nil {
+			return err
+		}
 	}
 
 	res, err := tx.Query("SELECT value FROM radreply WHERE attribute = 'Tunnel-Private-Group-ID' AND username = ?", strings.ToLower(clientMac))
@@ -367,7 +455,7 @@ func (h *Handler) work() error {
 			"targetVLAN": obj.targetVLAN,
 		}).Info("Processing")
 		opsProcessed.Add(1)
-		err = h.moveHostToVLAN(obj.id, obj.clientMac, obj.targetVLAN)
+		err = h.MoveHostToVLAN(obj.id, obj.clientMac, obj.targetVLAN)
 		if err != nil {
 			return err
 		}
