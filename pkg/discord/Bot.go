@@ -52,6 +52,10 @@ func (d *Discord) Setup() {
 	users := viper.GetStringSlice("dusers")
 	if token != "" {
 		log.Info("Discord token detected, starting bot!")
+		log.Info("Authorized users: ")
+		for user := range users {
+			log.Info(user)
+		}
 
 		discord, err := discordgo.New("Bot " + token)
 		if err != nil {
