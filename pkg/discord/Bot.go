@@ -131,7 +131,7 @@ func (d *Discord) Setup() {
 		}).Desc("Finds an user by either email, hostname or mac")
 
 		router.On("patch", func(ctx *exrouter.Context) {
-			if !isOk(ctx.Msg.Author.Username) {
+			if !isOk(ctx.Msg.Author.ID) {
 				log.WithFields(log.Fields{
 					"id":   ctx.Msg.Author.ID,
 					"name": ctx.Msg.Author.Username,
