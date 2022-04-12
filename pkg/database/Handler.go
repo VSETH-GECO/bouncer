@@ -107,6 +107,7 @@ func CopyHandler(src *Handler) *Handler {
 // Connect to the database
 func (h *Handler) Connect() {
 	var err error
+	log.Info("Establishing new DB connection")
 	h.connection, err = sql.Open("mysql", h.user+":"+h.password+"@tcp("+h.host+":"+strconv.Itoa(h.port)+")/"+h.database)
 	if err != nil {
 		log.WithError(err).Fatal("Couldn't Connect to database!")

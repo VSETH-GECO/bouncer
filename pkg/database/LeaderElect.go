@@ -81,6 +81,16 @@ func (l *LeaderElect) Refresh(lock int, connection *sql.DB) (err error) {
 
 func (l *LeaderElect) updateOrDie(lock int) {
 	myConnection := CopyHandler(l.connection)
+	defer func(connection *sql.DB) {
+		if connection == nil {
+			return
+		}
+		err := connection.Close()
+		if err != nil {
+			log.WithError(err).Info("Couldn't close DB connection")
+		}
+	}(myConnection.connection)
+
 	for {
 		err := l.Refresh(lock, myConnection.connection)
 		if err != nil {
@@ -93,12 +103,14 @@ func (l *LeaderElect) updateOrDie(lock int) {
 		if err != nil {
 			log.WithError(err).Fatal("Error checking my leader lock!")
 		}
-		defer result.Close()
 		if !result.Next() {
 			log.Warn("Error checking my leader lock - empty result?")
+			result.Close()
+			continue
 		}
 		var actualNodeID string
 		err = result.Scan(&actualNodeID)
+		result.Close()
 		if err != nil {
 			log.WithError(err).Fatal("Error checking my leader lock!")
 		}
@@ -129,6 +141,7 @@ func (l *LeaderElect) releaseLockOnShutdown(lock int) {
 	go func() {
 		<-sigChan
 		handler()
+		myConnection.connection.Close()
 		os.Exit(0)
 	}()
 

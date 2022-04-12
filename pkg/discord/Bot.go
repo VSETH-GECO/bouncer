@@ -53,7 +53,7 @@ func (d *Discord) Setup() {
 	if token != "" {
 		log.Info("Discord token detected, starting bot!")
 		log.Info("Authorized users: ")
-		for user := range users {
+		for _, user := range users {
 			log.Info(user)
 		}
 
