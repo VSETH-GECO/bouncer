@@ -40,6 +40,7 @@ var ServeCmd = &cobra.Command{
 	Use:     "run starts the bouncer daemon",
 	Aliases: []string{"run"},
 	Run: func(cmd *cobra.Command, args []string) {
+		migrate.RunCommand()
 		run.ExecCommand()
 	},
 }
