@@ -225,22 +225,8 @@ func (h *Handler) FindUser(value string) (mail string, mac string, vlan string, 
 		} else {
 			_ = res.Close()
 
-			res, err = h.connection.Query("SELECT HEX(hwaddr) FROM lease4 WHERE username = LOWER(?);", value)
-			if res.Next() {
-				err = res.Scan(&mac)
-				_ = res.Close()
-
-				mail = "N/A"
-
-				if err != nil {
-					return
-				}
-			} else {
-				_ = res.Close()
-				return
-			}
-
-			return
+			mac = value
+			mail = "N/A"
 		}
 	}
 
