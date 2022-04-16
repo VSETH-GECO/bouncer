@@ -182,6 +182,7 @@ func (h *Handler) Migrate(force int) error {
 // FindUser tries to find a user by handle from discord
 func (h *Handler) FindUser(value string) (mail string, mac string, vlan string, switchIP string, port string, hostname string, ip string, ok bool, err error) {
 	ok = false
+
 	res, err := h.connection.Query("SELECT username, mac FROM login_logs WHERE LOWER(username)=LOWER(?) or LOWER(mac)=LOWER(?);", value, value)
 	if err != nil {
 		return
@@ -247,6 +248,9 @@ func (h *Handler) FindUser(value string) (mail string, mac string, vlan string, 
 	// Get switch info
 	session, err := h.FindSessionForMAC(mac)
 	if err != nil {
+		return
+	}
+	if session == nil {
 		return
 	}
 	switchIP = session.switchIP
