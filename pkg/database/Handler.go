@@ -1,100 +1,75 @@
 package database
 
 import (
-	"container/list"
 	"database/sql"
 	"errors"
 	"github.com/VSETH-GECO/bouncer/migrations"
-	"github.com/VSETH-GECO/bouncer/pkg/radius"
-	"github.com/go-sql-driver/mysql"
-	"github.com/golang-migrate/migrate"
-	mysqlDriver "github.com/golang-migrate/migrate/database/mysql"
-	bindata "github.com/golang-migrate/migrate/source/go_bindata"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/VSETH-GECO/bouncer/pkg/config"
+	"github.com/golang-migrate/migrate/v4"
+	mysqlDriver "github.com/golang-migrate/migrate/v4/database/mysql"
+	bindata "github.com/golang-migrate/migrate/v4/source/go_bindata"
 	log "github.com/sirupsen/logrus"
-	"github.com/spf13/viper"
 	"net"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 )
 
-var (
-	opsProcessed = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "bouncer_processed_requests",
-		Help: "The total number of processed requests",
-	})
-	opsProcessedSuccessfully = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "bouncer_processed_requests_success",
-		Help: "The total number of successfully processed requests",
-	})
-	opsProcessedUseless = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "bouncer_processed_useless_requests",
-		Help: "The total number of requests without any effect",
-	})
-	opsProcessedNewUser = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "bouncer_processed_requests_new",
-		Help: "The total number of requests with new users",
-	})
-	opsFailedCoA = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "bouncer_failed_coa",
-		Help: "The total number of failed CoA requests",
-	})
-)
-
-// Session describes details of a (running) RADIUS Session
-type Session struct {
-	uid        string
-	startDate  mysql.NullTime
-	switchIP   string
-	switchPort string
+// RadiusSession describes details of a (running) RADIUS RadiusSession
+type RadiusSession struct {
+	Uid           string
+	StartDate     sql.NullTime
+	EndDate       sql.NullTime
+	EndReason     string
+	SwitchIP      net.IP
+	SwitchPort    string
+	BytesSent     int
+	BytesReceived int
+	ClientIP      net.IP
 }
 
 // Handler is responsible for handling database-related tasks
 type Handler struct {
-	host         string
-	port         int
-	user         string
-	password     string
-	database     string
-	connection   *sql.DB
-	switchSecret string
+	host       string
+	port       int
+	user       string
+	password   string
+	database   string
+	connection *sql.DB
 }
 
 // CreateHandler instantiates a new handler
 func CreateHandler(host string, port int, user string, password string, database string, switchSecret string) *Handler {
 	obj := Handler{
-		host:         host,
-		port:         port,
-		user:         user,
-		password:     password,
-		database:     database,
-		switchSecret: switchSecret,
+		host:     host,
+		port:     port,
+		user:     user,
+		password: password,
+		database: database,
 	}
 	return &obj
 }
 
-// CreateHandlerFromConfig instantiates a new handler, pulling the values from viper
+// CreateHandlerFromConfig instantiates a new handler, pulling the values from our config
 func CreateHandlerFromConfig() *Handler {
-	return CreateHandler(viper.GetString("host"),
-		viper.GetInt("port"),
-		viper.GetString("user"),
-		viper.GetString("password"),
-		viper.GetString("database"),
-		viper.GetString("switch-secret"))
+	return CreateHandler(
+		config.CurrentOptions.DBHost,
+		config.CurrentOptions.DBPort,
+		config.CurrentOptions.DBUser,
+		config.CurrentOptions.DBPassword,
+		config.CurrentOptions.DBDatabase,
+		config.CurrentOptions.SwitchCOASecret,
+	)
 }
 
 // CopyHandler instantiates a new handler from an existing one
 func CopyHandler(src *Handler) *Handler {
 	obj := Handler{
-		host:         src.host,
-		port:         src.port,
-		user:         src.user,
-		password:     src.password,
-		database:     src.database,
-		switchSecret: src.switchSecret,
+		host:     src.host,
+		port:     src.port,
+		user:     src.user,
+		password: src.password,
+		database: src.database,
 		// connection is _not_ duplicated
 	}
 	// If src is already connected, also Connect the copy
@@ -108,42 +83,10 @@ func CopyHandler(src *Handler) *Handler {
 func (h *Handler) Connect() {
 	var err error
 	log.Info("Establishing new DB connection")
-	h.connection, err = sql.Open("mysql", h.user+":"+h.password+"@tcp("+h.host+":"+strconv.Itoa(h.port)+")/"+h.database)
+	h.connection, err = sql.Open("mysql", h.user+":"+h.password+"@tcp("+h.host+":"+strconv.Itoa(h.port)+")/"+h.database+"?multiStatements=true&parseTime=true")
 	if err != nil {
 		log.WithError(err).Fatal("Couldn't Connect to database!")
 	}
-}
-
-// FindSessionForMAC looks up the RADIUS Session for a given client
-func (h *Handler) FindSessionForMAC(mac string) (*Session, error) {
-	obj := Session{}
-	rows, err := h.connection.Query("select acctsessionid, acctstarttime, nasipaddress, nasportid from radacct where username=? and (acctterminatecause='') order by acctsessionid desc limit 1;", mac)
-	defer rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	if rows.Next() {
-		err = rows.Scan(&obj.uid, &obj.startDate, &obj.switchIP, &obj.switchPort)
-		if err != nil {
-			return nil, err
-		}
-		return &obj, nil
-	}
-	return nil, nil
-}
-
-// FindMACByIP finds a client's MAC from it's DHCP lease
-func (h *Handler) FindMACByIP(ip string) (mac string, err error) {
-	rows, err := h.connection.Query("SELECT hex(hwaddr) FROM lease4 WHERE INET_NTOA(address)=?;", ip)
-	defer rows.Close()
-	if err != nil {
-		return
-	}
-	if !rows.Next() {
-		return
-	}
-	err = rows.Scan(&mac)
-	return
 }
 
 // Migrate updates the database schema to the current version
@@ -175,298 +118,6 @@ func (h *Handler) Migrate(force int) error {
 	}
 	if err != nil && !(err.Error() == "no change") {
 		return err
-	}
-	return nil
-}
-
-// FindUser tries to find a user by handle from discord
-func (h *Handler) FindUser(value string) (mail string, mac string, vlan string, switchIP string, port string, hostname string, ip string, ok bool, err error) {
-	ok = false
-
-	res, err := h.connection.Query("SELECT username, mac FROM login_logs WHERE LOWER(username)=LOWER(?) or LOWER(mac)=LOWER(?);", value, value)
-	if err != nil {
-		return
-	}
-
-	if res.Next() {
-		err = res.Scan(&mail, &mac)
-		res.Close()
-		if err != nil {
-			return
-		}
-	} else {
-		res.Close()
-
-		// Let's see if we can find the user by hostname instead
-		res, err = h.connection.Query("SELECT HEX(hwaddr) FROM lease4 WHERE hostname = ?;", value)
-		if err != nil {
-			return
-		}
-		if res.Next() {
-			err = res.Scan(&mac)
-			_ = res.Close()
-			if err != nil {
-				return
-			}
-
-			res, err = h.connection.Query("SELECT username FROM login_logs WHERE LOWER(mac)=LOWER(?);", mac)
-			if err != nil {
-				return
-			}
-			if res.Next() {
-				err = res.Scan(&mail)
-				_ = res.Close()
-				if err != nil {
-					return
-				}
-			} else {
-				_ = res.Close()
-				return
-			}
-		} else {
-			_ = res.Close()
-
-			mac = value
-			mail = "N/A"
-		}
-	}
-
-	// Get VLAN
-	res, err = h.connection.Query("SELECT value FROM radreply WHERE attribute='Tunnel-Private-Group-ID' and username=LOWER(?)", mac)
-	if err != nil {
-		return
-	}
-	if !res.Next() {
-		return
-	}
-	err = res.Scan(&vlan)
-	_ = res.Close()
-	if err != nil {
-		return
-	}
-
-	// Get switch info
-	session, err := h.FindSessionForMAC(mac)
-	if err != nil {
-		return
-	}
-	if session == nil {
-		return
-	}
-	switchIP = session.switchIP
-	port = session.switchPort
-
-	// Get host info
-	val, err := h.connection.Query("SELECT hostname,INET_NTOA(address) FROM lease4 WHERE hwaddr = UNHEX(?);", mac)
-	if err != nil {
-		return
-	}
-	if val.Next() {
-		err = val.Scan(&hostname, &ip)
-		if err != nil {
-			return
-		}
-	}
-
-	ok = true
-	return
-}
-
-// addNewUser adds a new user for a host
-func (h *Handler) addNewUser(tx *sql.Tx, id int, clientMac string, targetVLAN int) error {
-	opsProcessedNewUser.Inc()
-	_, err := tx.Exec("INSERT INTO radcheck(username, attribute, op, value) VALUES(?, 'Cleartext-Password', ':=', ?)", clientMac, clientMac)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec("INSERT INTO radreply(username, attribute, op, value) VALUES(?, 'Tunnel-Private-Group-ID', ':=', ?)", clientMac, strconv.Itoa(targetVLAN))
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec("INSERT INTO radreply(username, attribute, op, value) VALUES(?, 'Tunnel-Medium-Type', ':=', 'IEEE-802')", clientMac)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec("INSERT INTO radreply(username, attribute, op, value) VALUES(?, 'Tunnel-Type', ':=', 'VLAN')", clientMac)
-	return err
-}
-
-// MoveHostToVLAN moves a host between VLANs, taking care of all database updates
-func (h *Handler) MoveHostToVLAN(id int, clientMac string, targetVLAN int) error {
-	clientMac = strings.ToLower(clientMac)
-	// Let's see whether this host can actually be found
-	val, err := h.FindSessionForMAC(clientMac)
-	if err != nil {
-		return err
-	}
-	noRunningSession := val == nil
-	tx, err := h.connection.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if id != -1 {
-		_, err = tx.Exec("DELETE FROM bouncer_jobs WHERE id=?", id)
-		if err != nil {
-			return err
-		}
-	}
-
-	res, err := tx.Query("SELECT value FROM radreply WHERE attribute = 'Tunnel-Private-Group-ID' AND username = ?", strings.ToLower(clientMac))
-	if err != nil {
-		res.Close()
-		return err
-	}
-	oldVlan := -1
-	if !res.Next() {
-		// No entry found - this user is completely new
-		res.Close()
-		err = h.addNewUser(tx, id, clientMac, targetVLAN)
-		if err != nil {
-			return err
-		}
-	} else {
-		// We found an entry -> update it
-		var oldVlanStr string
-		err = res.Scan(&oldVlanStr)
-		res.Close()
-		if err != nil {
-			return err
-		}
-		oldVlan, err = strconv.Atoi(oldVlanStr)
-		if err != nil {
-			return err
-		}
-
-		_, err = tx.Exec("UPDATE radreply SET value = ? WHERE attribute = 'Tunnel-Private-Group-ID' AND username = ?", strconv.Itoa(targetVLAN), strings.ToLower(clientMac))
-		if err != nil {
-			return err
-		}
-	}
-
-	// I'm not sure if you want this, so let's log that case
-	if oldVlan == targetVLAN {
-		log.WithFields(log.Fields{
-			"id":         id,
-			"clientMAC":  clientMac,
-			"targetVLAN": targetVLAN,
-		}).Warn("Got request to move to same vlan, silently discarding this ;-)")
-		tx.Commit()
-		opsProcessedSuccessfully.Inc()
-		opsProcessedUseless.Inc()
-		return nil
-	}
-
-	// If there is a running session, force the switch to reauth
-	if !noRunningSession {
-		request := radius.CoARequest{
-			SessionUID:       val.uid,
-			SessionStartDate: val.startDate.Time,
-			SwitchIP:         net.ParseIP(val.switchIP),
-			SwitchSecret:     []byte(h.switchSecret),
-		}
-		err = request.SendDisconnect()
-		if err != nil {
-			opsFailedCoA.Inc()
-			return err
-		}
-	}
-
-	// Fetch IP-related information from the DHCP database
-	ip := ""
-	hostname := ""
-	ipRes, err := tx.Query("SELECT hostname,INET_NTOA(address) FROM lease4 WHERE hwaddr = UNHEX(?);", clientMac)
-	if err != nil {
-		// Do not return, we already sent the CoA which cannot be undone!
-		log.WithError(err).Warn("Couldn't fetch IP information")
-	} else {
-		if ipRes.Next() {
-			err = ipRes.Scan(&hostname, &ip)
-			if err != nil {
-				log.WithError(err).Warn("Couldn't decode IP information")
-			}
-		}
-	}
-	if ipRes != nil {
-		ipRes.Close()
-	}
-	_, err = tx.Exec("DELETE FROM lease4 WHERE hwaddr = UNHEX(?);", clientMac)
-	if err != nil {
-		log.WithError(err).Warn("Couldn't remove IP information")
-	}
-
-	log.WithFields(log.Fields{
-		"id":         id,
-		"clientMAC":  clientMac,
-		"oldVLAN":    oldVlan,
-		"targetVLAN": targetVLAN,
-		"oldIP":      ip,
-		"hostname":   hostname,
-	}).Info("VLAN move successful")
-
-	switchIP := ""
-	switchPort := ""
-
-	if !noRunningSession {
-		switchIP = val.switchIP
-		switchPort = val.switchPort
-	}
-
-	// Also log success to database
-	_, err = tx.Exec("INSERT INTO bouncer_log(clientMAC, oldVLAN, newVLAN, switchIP, switchPort, clientName, clientIP) VALUES(?, ?, ?, ?, ?, ?, ?)",
-		strings.ToLower(clientMac), strconv.Itoa(oldVlan), strconv.Itoa(targetVLAN), switchIP, switchPort, hostname, ip)
-	if err != nil {
-		return err
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return err
-	}
-	opsProcessedSuccessfully.Add(1)
-	return nil
-}
-
-// work processes the work queue once
-func (h *Handler) work() error {
-	res, err := h.connection.Query("SELECT id,clientMAC,targetVLAN FROM bouncer_jobs ORDER BY id ASC")
-	if err != nil {
-		return err
-	}
-	type work struct {
-		id         int
-		targetVLAN int
-		clientMac  string
-	}
-	entryList := list.New()
-	for res.Next() {
-		obj := work{}
-		err = res.Scan(&obj.id, &obj.clientMac, &obj.targetVLAN)
-		if err != nil {
-			return err
-		}
-		obj.clientMac = strings.ToUpper(obj.clientMac)
-		log.WithFields(log.Fields{
-			"id":         obj.id,
-			"clientMAC":  obj.clientMac,
-			"targetVLAN": obj.targetVLAN,
-		}).Debug("New job fetched")
-		entryList.PushBack(obj)
-	}
-	res.Close()
-
-	for ptr := entryList.Front(); ptr != nil; ptr = ptr.Next() {
-		obj := (ptr.Value).(work)
-		log.WithFields(log.Fields{
-			"id":         obj.id,
-			"clientMAC":  obj.clientMac,
-			"targetVLAN": obj.targetVLAN,
-		}).Info("Processing")
-		opsProcessed.Add(1)
-		err = h.MoveHostToVLAN(obj.id, obj.clientMac, obj.targetVLAN)
-		if err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -503,7 +154,7 @@ func (h *Handler) CheckDBVersion() (err error) {
 	lastMigration := names[len(names)-1]
 	nameParts := strings.Split(lastMigration, "_")
 	if len(nameParts) < 2 {
-		err = errors.New("unexpected string split on resouce name")
+		err = errors.New("unexpected string split on resource name")
 		return
 	}
 	latestVersion, err := strconv.ParseUint(nameParts[0], 10, 16)
@@ -525,18 +176,24 @@ func (h *Handler) CheckDBVersion() (err error) {
 	return
 }
 
-// PollLoop permanently loops over the work queue
-func (h *Handler) PollLoop() {
-	log.Info("Entering main poll loop")
-	if h.connection == nil {
-		h.Connect()
-	}
-
-	for {
-		err := h.work()
+func Close(rows *sql.Rows) {
+	if rows != nil {
+		err := rows.Close()
 		if err != nil {
-			log.WithError(err).Warn("poll loop iteration failed")
+			log.WithError(err).Warn("Couldn't properly close sql.Rows")
 		}
-		time.Sleep(5 * time.Second)
 	}
+}
+
+func Rollback(tx *sql.Tx) {
+	if tx != nil {
+		err := tx.Rollback()
+		if err != sql.ErrTxDone && err != nil {
+			log.WithError(err).Warn("Transaction rollback failed")
+		}
+	}
+}
+
+func (h *Handler) BeginTx() (*sql.Tx, error) {
+	return h.connection.Begin()
 }

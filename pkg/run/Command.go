@@ -1,6 +1,8 @@
 package run
 
 import (
+	"github.com/VSETH-GECO/bouncer/pkg/config"
+	"github.com/VSETH-GECO/bouncer/pkg/controller"
 	"github.com/VSETH-GECO/bouncer/pkg/database"
 	"github.com/VSETH-GECO/bouncer/pkg/discord"
 	"github.com/VSETH-GECO/bouncer/pkg/prometheus"
@@ -49,5 +51,6 @@ func ExecCommand() {
 
 	bot := discord.NewDiscord(dbHandler)
 	bot.Setup()
-	dbHandler.PollLoop()
+	jobController := controller.NewClientController(dbHandler, config.CurrentOptions.SwitchCOASecret)
+	jobController.Spin()
 }

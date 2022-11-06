@@ -42,6 +42,10 @@ var (
 		},
 		[]string{"switch"},
 	)
+	opsProcessedNewUser = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bouncer_processed_requests_new",
+		Help: "The total number of requests with new users",
+	})
 )
 
 type PrometheusHandler struct {

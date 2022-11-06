@@ -17,15 +17,19 @@ type LeaderElect struct {
 	nodeID     string
 }
 
-// CreateLeaderElect prepares a new leader election object, using a combination of hostname and pid as unique id
-func CreateLeaderElect(connection *Handler) *LeaderElect {
+func GetNodeID() string {
 	host, err := os.Hostname()
 	if err != nil {
 		log.WithError(err).Warn("Couldn't determine hostname!")
 	}
+	return host + "-" + strconv.Itoa(os.Getpid())
+}
+
+// CreateLeaderElect prepares a new leader election object, using a combination of hostname and pid as unique id
+func CreateLeaderElect(connection *Handler) *LeaderElect {
 	obj := &LeaderElect{
 		connection: connection,
-		nodeID:     host + "-" + strconv.Itoa(os.Getpid()),
+		nodeID:     GetNodeID(),
 	}
 	return obj
 }
@@ -54,16 +58,22 @@ func (l *LeaderElect) TryAcquire(lock int) (isLeader bool, leaderName string, er
 		return
 	}
 	defer result.Close()
-	if !result.Next() {
-		err = errors.New("unexpected empty result")
-		return
-	}
 	var actualNodeID string
-	err = result.Scan(&actualNodeID)
-	if err != nil {
-		return
+	if !result.Next() {
+		// No lock entry is in the table - lets add ourselves!
+		_, err = tx.Exec("INSERT INTO bouncer_election(nodeid, id, time) VALUES (?, ?, TIMESTAMPADD(SECOND, -30, CURRENT_TIMESTAMP()));", l.nodeID, lock)
+		if err != nil {
+			err = errors.New("couldn't create new lock entry")
+			return
+		}
+		actualNodeID = l.nodeID
+	} else {
+		err = result.Scan(&actualNodeID)
+		if err != nil {
+			return
+		}
+		result.Close()
 	}
-	result.Close()
 	err = tx.Commit()
 	if err != nil {
 		return
@@ -87,7 +97,7 @@ func (l *LeaderElect) updateOrDie(lock int) {
 		}
 		err := connection.Close()
 		if err != nil {
-			log.WithError(err).Info("Couldn't close DB connection")
+			log.WithError(err).Info("Couldn't Close DB connection")
 		}
 	}(myConnection.connection)
 
@@ -127,7 +137,8 @@ func (l *LeaderElect) releaseLockOnShutdown(lock int) {
 	myConnection := CopyHandler(l.connection)
 
 	handler := func() {
-		_, err := myConnection.connection.Exec("UPDATE bouncer_election SET time='0000-00-00 00:00:00', nodeid=NULL WHERE id=? AND nodeid=?;", lock, l.nodeID)
+		// All zeros is no longer a valid timestamp in MySQL 8
+		_, err := myConnection.connection.Exec("UPDATE bouncer_election SET time='2000-01-01 10:00:00', nodeid=NULL WHERE id=? AND nodeid=?;", lock, l.nodeID)
 		if err != nil {
 			log.WithError(err).Warn("Couldn't release lock on shutdown!")
 		} else {
