@@ -40,7 +40,7 @@ func (h *Handler) FindMAC(value string) (mac string, err error) {
 	}
 
 	// Neither MAC nor hostname nor IP - maybe username?
-	res, err = h.connection.Query("SELECT mac FROM bouncer.login_logs WHERE username=?", value)
+	res, err = h.connection.Query("SELECT mac FROM login_logs WHERE username=?", value)
 	if err != nil {
 		return
 	}
@@ -59,7 +59,7 @@ func (h *Handler) LoadUser(mac string) (*User, error) {
 		Mac: mac,
 	}
 
-	res, err := h.connection.Query("SELECT username FROM bouncer.login_logs WHERE mac=?", mac)
+	res, err := h.connection.Query("SELECT username FROM login_logs WHERE mac=?", mac)
 	if err != nil {
 		return nil, err
 	}
