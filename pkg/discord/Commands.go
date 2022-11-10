@@ -1,6 +1,7 @@
 package discord
 
 import (
+	"fmt"
 	"github.com/VSETH-GECO/bouncer/pkg/database"
 	"github.com/bwmarrin/discordgo"
 	log "github.com/sirupsen/logrus"
@@ -164,9 +165,44 @@ func (d *Discord) handleUserSubcommand(s *discordgo.Session, i *discordgo.Intera
 				}
 			}
 
+			// We need to validate the VLAN choice
+			sessions, err := d.db.FindSessionsForMAC(d.macCache[i.Interaction.Message.Interaction.ID])
+			var message string
+			if err != nil {
+				log.WithError(err).Warn("Error during session lookup")
+				message = "***VLAN change failed!***"
+			}
+			if len(sessions) < 1 {
+				log.WithError(err).Warn("Couldn't find an open radius session for the mac specified")
+				message = "***VLAN change failed!***"
+			}
+			switchRef, err := d.db.SwitchByIP(sessions[0].SwitchIP.String())
+			if err != nil {
+				log.WithError(err).Warn("Error during switch lookup")
+				message = "***VLAN change failed!***"
+			}
+			if switchRef == nil {
+				log.WithError(err).Warn("Switch lookup failed")
+				message = "***VLAN change failed!***"
+			}
+
+			if targetVLAN == "1" {
+				targetVLAN = fmt.Sprint(switchRef.PrimaryVlan.VlanID)
+			} else {
+				ok := false
+				for _, vlan := range switchRef.Vlans {
+					if fmt.Sprint(vlan.VlanID) == targetVLAN {
+						ok = true
+					}
+				}
+				if !ok {
+					targetVLAN = fmt.Sprint(switchRef.PrimaryVlan.VlanID)
+				}
+			}
+			
 			// We need to get the id of the original message that triggered the original interaction
-			err := d.dc.ChangeUserVLAN(d.macCache[i.Interaction.Message.Interaction.ID], targetVLAN)
-			message := "**VLAN change queued**"
+			err = d.dc.ChangeUserVLAN(d.macCache[i.Interaction.Message.Interaction.ID], targetVLAN)
+			message = "**VLAN change queued**"
 			if err != nil {
 				log.WithError(err).Warn("Error during vlan change request")
 				message = "***VLAN change failed!***"
