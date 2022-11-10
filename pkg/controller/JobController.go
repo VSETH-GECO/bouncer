@@ -178,6 +178,7 @@ func (c *JobController) Spin() {
 	log.WithField("node", database.GetNodeID()).Info("Entering main poll loop")
 
 	for {
+		c.db = database.CopyHandler(c.db)
 		err := c.work()
 		if err != nil {
 			log.WithError(err).Warn("poll loop iteration failed")
