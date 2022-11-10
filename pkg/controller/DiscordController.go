@@ -147,7 +147,12 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 			"Received",
 			"Sent",
 		})
+		count := 0
 		for _, session := range user.Sessions {
+			count++
+			if count >= 3 {
+				break
+			}
 			var switchName string
 			mySwitch, err := dc.db.SwitchByIP(session.SwitchIP.String())
 			if err != nil {
