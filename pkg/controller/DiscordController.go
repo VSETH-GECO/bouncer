@@ -257,7 +257,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 			Style:    discordgo.SuccessButton,
 			Disabled: !buttonsEnabled,
 			Emoji: discordgo.ComponentEmoji{
-				Name: "✓",
+				Name: "✔️",
 			},
 			CustomID: "findLoginBtn",
 		})
