@@ -1,0 +1,1 @@
+ALTER TABLE bouncer_jobs DROP INDEX clientMAC;
