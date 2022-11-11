@@ -43,11 +43,11 @@ func NewClientController(db *database.Handler, switchSecret string) *JobControll
 }
 
 // ProcessMoveVLANJob processes a job that moves a host between VLANs, taking care of all database updates
-func (c *JobController) ProcessMoveVLANJob(jobId int, clientMac string, targetVLAN int) error {
-	clientMac = strings.ToLower(clientMac)
+func (c *JobController) ProcessMoveVLANJob(job *database.Job) error {
+	job.ClientMac = strings.ToLower(job.ClientMac)
 
 	// Let's see whether this host can actually be found
-	val, err := c.db.FindSessionsForMAC(clientMac)
+	val, err := c.db.FindSessionsForMAC(job.ClientMac)
 	if err != nil {
 		return err
 	}
@@ -57,40 +57,53 @@ func (c *JobController) ProcessMoveVLANJob(jobId int, clientMac string, targetVL
 	if err != nil {
 		return err
 	}
-	defer database.Rollback(tx)
-
-	if jobId != -1 {
-		err = c.db.DeleteJob(tx, jobId)
-		if err != nil {
-			return err
+	var success = false
+	defer func() {
+		if !success {
+			database.Rollback(tx)
+			job.Retries = job.Retries + 1
+			err := c.db.SetJobErrorCount(job)
+			if err != nil {
+				log.WithError(err).Warn("Couldn't update job error counter!")
+			}
+		} else {
+			err = c.db.DeleteJob(tx, job.Id)
+			if err != nil {
+				log.WithError(err).Warn("Couldn't delete job!")
+			}
+			err = tx.Commit()
+			if err != nil {
+				log.WithError(err).Warn("Couldn't commit job!")
+			}
+			opsProcessedSuccessfully.Add(1)
 		}
-	}
+	}()
 
-	oldVlan, err := c.db.CheckUserSignedIn(tx, clientMac)
+	oldVlan, err := c.db.CheckUserSignedIn(tx, job.ClientMac)
 	if err != nil {
 		return err
 	}
 
 	if oldVlan == -1 {
 		// No entry found - this user is completely new
-		err = c.db.AddNewUser(tx, clientMac, targetVLAN)
+		err = c.db.AddNewUser(tx, job.ClientMac, job.TargetVLAN)
 		if err != nil {
 			return err
 		}
 	} else {
 		// We found an entry -> update it
-		err = c.db.UpdateUser(tx, clientMac, targetVLAN)
+		err = c.db.UpdateUser(tx, job.ClientMac, job.TargetVLAN)
 		if err != nil {
 			return err
 		}
 	}
 
 	// I'm not sure if you want this, so let's log that case
-	if oldVlan == targetVLAN {
+	if oldVlan == job.TargetVLAN {
 		log.WithFields(log.Fields{
-			"jobId":      jobId,
-			"clientMAC":  clientMac,
-			"targetVLAN": targetVLAN,
+			"job.Id":         job.Id,
+			"job.ClientMac":  job.ClientMac,
+			"job.TargetVLAN": job.TargetVLAN,
 		}).Warn("Got request to move to same vlan, silently discarding this ;-)")
 		err = tx.Commit()
 		if err != nil {
@@ -117,18 +130,19 @@ func (c *JobController) ProcessMoveVLANJob(jobId int, clientMac string, targetVL
 	}
 
 	// Clear the old lease since we've kicked out the user
-	hostname, oldIp, err := c.db.ClearLeasesForMAC(tx, clientMac)
+	hostname, oldIp, err := c.db.ClearLeasesForMAC(tx, job.ClientMac)
 	if oldIp == nil {
 		oldIp = &net.IP{}
 	}
 
 	log.WithFields(log.Fields{
-		"jobId":      jobId,
-		"clientMAC":  clientMac,
-		"oldVLAN":    oldVlan,
-		"targetVLAN": targetVLAN,
-		"oldIP":      oldIp.String(),
-		"hostname":   hostname,
+		"job.Id":         job.Id,
+		"job.ClientMac":  job.ClientMac,
+		"oldVLAN":        oldVlan,
+		"job.TargetVLAN": job.TargetVLAN,
+		"oldIP":          oldIp.String(),
+		"hostname":       hostname,
+		"retries":        job.Retries,
 	}).Info("VLAN move successful")
 
 	switchIP := net.IP{}
@@ -140,16 +154,13 @@ func (c *JobController) ProcessMoveVLANJob(jobId int, clientMac string, targetVL
 	}
 
 	// Also log success to database
-	err = c.db.LogJobResult(tx, clientMac, oldVlan, targetVLAN, switchIP, switchPort, hostname, *oldIp)
+	err = c.db.LogJobResult(tx, job.ClientMac, oldVlan, job.TargetVLAN, switchIP, switchPort, hostname, *oldIp)
 	if err != nil {
 		return err
 	}
 
-	err = tx.Commit()
-	if err != nil {
-		return err
-	}
-	opsProcessedSuccessfully.Add(1)
+	success = true
+	// deferred handler will make sure to commit or rollback
 	return nil
 }
 
@@ -165,7 +176,7 @@ func (c *JobController) work() error {
 			"targetVLAN": obj.TargetVLAN,
 		}).Info("Processing")
 		opsProcessed.Add(1)
-		err = c.ProcessMoveVLANJob(obj.Id, obj.ClientMac, obj.TargetVLAN)
+		err = c.ProcessMoveVLANJob(&obj)
 		if err != nil {
 			return err
 		}

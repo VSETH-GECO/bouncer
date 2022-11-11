@@ -13,6 +13,8 @@ type Job struct {
 	Id         int
 	TargetVLAN int
 	ClientMac  string
+	LastUpdate sql.NullTime
+	Retries    int
 }
 
 func (h *Handler) DeleteJob(tx *sql.Tx, jobId int) error {
@@ -26,8 +28,13 @@ func (h *Handler) LogJobResult(tx *sql.Tx, clientMAC string, oldVLAN int, newVLA
 	return err
 }
 
+func (h *Handler) SetJobErrorCount(job *Job) error {
+	_, err := h.connection.Exec("UPDATE bouncer_jobs SET retires=?, last_update=CURRENT_TIMESTAMP() WHERE id=?", job.Retries, job.Id)
+	return err
+}
+
 func (h *Handler) FetchPendingJobs() (*list.List, error) {
-	res, err := h.connection.Query("SELECT id,clientMAC,targetVLAN FROM bouncer_jobs ORDER BY id ASC")
+	res, err := h.connection.Query("SELECT id,clientMAC,targetVLAN,last_update,retires FROM bouncer_jobs WHERE retires < 3")
 	defer Close(res)
 	if err != nil {
 		return nil, err
@@ -36,7 +43,7 @@ func (h *Handler) FetchPendingJobs() (*list.List, error) {
 	entryList := list.New()
 	for res.Next() {
 		obj := Job{}
-		err = res.Scan(&obj.Id, &obj.ClientMac, &obj.TargetVLAN)
+		err = res.Scan(&obj.Id, &obj.ClientMac, &obj.TargetVLAN, &obj.LastUpdate, &obj.Retries)
 		if err != nil {
 			return nil, err
 		}
@@ -45,6 +52,8 @@ func (h *Handler) FetchPendingJobs() (*list.List, error) {
 			"id":         obj.Id,
 			"clientMAC":  obj.ClientMac,
 			"targetVLAN": obj.TargetVLAN,
+			"lastUpdate": obj.LastUpdate,
+			"retries":    obj.Retries,
 		}).Debug("New job fetched")
 		entryList.PushBack(obj)
 	}
