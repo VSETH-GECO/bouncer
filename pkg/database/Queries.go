@@ -61,13 +61,14 @@ func (h *Handler) LoadUser(mac string) (*User, error) {
 
 	res, err := h.connection.Query("SELECT username FROM login_logs WHERE mac=?", mac)
 	if err != nil {
+		Close(res)
 		return nil, err
 	}
-	defer Close(res)
 
 	if res.Next() {
 		err = res.Scan(&user.Name)
 		if err != nil {
+			Close(res)
 			return nil, err
 		}
 
@@ -78,17 +79,19 @@ func (h *Handler) LoadUser(mac string) (*User, error) {
 			user.Email = "N/A"
 		}
 	}
+	Close(res)
 
 	res, err = h.connection.Query("SELECT hostname, INET_NTOA(address) FROM lease4 WHERE hwaddr=UNHEX(?)", mac)
 	if err != nil {
+		Close(res)
 		return nil, err
 	}
-	defer Close(res)
 
 	if res.Next() {
 		var ipStr string
 		err = res.Scan(&user.Hostname, &ipStr)
 		if err != nil {
+			Close(res)
 			return nil, err
 		}
 		user.IP = net.ParseIP(ipStr)
@@ -98,5 +101,6 @@ func (h *Handler) LoadUser(mac string) (*User, error) {
 	}
 
 	user.Sessions, err = h.FindSessionsForMAC(mac)
+	Close(res)
 	return user, err
 }
