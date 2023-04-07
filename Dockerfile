@@ -2,7 +2,7 @@ FROM golang:1.18-alpine AS build
 
 WORKDIR /app
 
-RUN go install github.com/kevinburke/go-bindata/go-bindata@latest
+RUN go install github.com/kevinburke/go-bindata/v4/go-bindata@latest
 
 COPY go.mod ./
 COPY go.sum ./
