@@ -100,7 +100,11 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 
 	var extraFields []*discordgo.MessageEmbedField
 	if len(user.Sessions) > 0 {
-		online = online + " since " + convertDate(user.Sessions[0].StartDate)
+		if !user.Sessions[0].EndDate.Valid {
+			online = online + " since " + convertDate(user.Sessions[0].StartDate)
+		} else {
+			online = online + " since " + convertDate(user.Sessions[0].EndDate)
+		}
 
 		if switchObj, err := dc.db.SwitchByIP(user.Sessions[0].SwitchIP.String()); err == nil {
 			extraFields = []*discordgo.MessageEmbedField{
