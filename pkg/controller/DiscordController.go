@@ -286,7 +286,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 
 	s, _ := json.MarshalIndent(card, "", "\t")
 	if s != nil {
-		fmt.Println(s)
+		fmt.Println(string(s))
 	}
 	return card, nil
 }
