@@ -44,7 +44,7 @@ func convertData(data int) string {
 	return fmt.Sprint(data)
 }
 
-func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnabled bool) (*UserCard, error) {
+func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnabled bool, shortCard bool) (*UserCard, error) {
 	card := &UserCard{
 		Content: "",
 	}
@@ -133,7 +133,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 		},
 	}
 
-	if len(user.Sessions) > 0 {
+	if !shortCard && len(user.Sessions) > 0 {
 		// We have RADIUS data, so lets put that in here
 		buf := bytes.Buffer{}
 		table := tablewriter.NewWriter(&buf)
@@ -182,93 +182,107 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 		table.Render()
 
 		card.Content = "Sessions in descending order:\n```md\n" + buf.String() + "\n```"
+	} else if shortCard {
+		card.Content = "User found, showing you their card"
 	} else {
 		card.Content = "No session found for this user, check back once they're plugged in."
 	}
 
-	// Available VLANs
-	var vlanRow discordgo.ActionsRow
-	vlansMissing := false
-	if len(user.Sessions) > 0 {
-		switchIP := user.Sessions[0].SwitchIP
-		switchRef, err := dc.db.SwitchByIP(switchIP.String())
-		if err != nil {
-			log.WithError(err).Warn("Switch lookup failed")
+	if !shortCard {
+		// Available VLANs
+		var vlanRow discordgo.ActionsRow
+		vlansMissing := false
+		if len(user.Sessions) > 0 {
+			switchIP := user.Sessions[0].SwitchIP
+			switchRef, err := dc.db.SwitchByIP(switchIP.String())
+			if err != nil {
+				log.WithError(err).Warn("Switch lookup failed")
+			}
+			if switchRef == nil {
+				log.WithField("ip", switchIP.String()).Warn("Unknown switch returned from RADIUS query!")
+			}
+			if err != nil || switchRef == nil {
+				vlanRow = discordgo.ActionsRow{}
+				vlansMissing = true
+			} else {
+				var vlanMenu []discordgo.SelectMenuOption
+				for _, vlan := range switchRef.Vlans {
+					isDefault := switchRef.PrimaryVlan == vlan
+					vlanMenu = append(vlanMenu, discordgo.SelectMenuOption{
+						Description: vlan.Description,
+						Value:       fmt.Sprint(vlan.VlanID),
+						Label:       fmt.Sprintf("VLAN %d (%s) - %s", vlan.VlanID, vlan.Name, vlan.IpRange.String()),
+						Default:     isDefault,
+					})
+				}
+				vlanRow = discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						discordgo.SelectMenu{
+							MaxValues:   1,
+							CustomID:    "findVlanSelect",
+							Placeholder: "Default VLAN",
+							Options:     vlanMenu,
+							Disabled:    !buttonsEnabled,
+						},
+					},
+				}
+			}
 		}
-		if switchRef == nil {
-			log.WithField("ip", switchIP.String()).Warn("Unknown switch returned from RADIUS query!")
-		}
-		if err != nil || switchRef == nil {
-			vlanRow = discordgo.ActionsRow{}
-			vlansMissing = true
-		} else {
-			var vlanMenu []discordgo.SelectMenuOption
-			for _, vlan := range switchRef.Vlans {
-				isDefault := switchRef.PrimaryVlan == vlan
-				vlanMenu = append(vlanMenu, discordgo.SelectMenuOption{
-					Description: vlan.Description,
-					Value:       fmt.Sprint(vlan.VlanID),
-					Label:       fmt.Sprintf("VLAN %d (%s) - %s", vlan.VlanID, vlan.Name, vlan.IpRange.String()),
-					Default:     isDefault,
+
+		// Actions!
+		var actions []discordgo.MessageComponent
+		if loginVlan > 0 {
+			// User is logged in ... so we can log them out or change their VLAN
+			actions = append(actions, discordgo.Button{
+				Label:    "Logout",
+				Style:    discordgo.DangerButton,
+				Disabled: !buttonsEnabled,
+				Emoji: discordgo.ComponentEmoji{
+					Name: "✖️",
+				},
+				CustomID: "findLogoutBtn",
+			})
+			if !vlansMissing {
+				actions = append(actions, discordgo.Button{
+					Label:    "Change VLAN",
+					Style:    discordgo.PrimaryButton,
+					Disabled: !buttonsEnabled,
+					Emoji: discordgo.ComponentEmoji{
+						Name: "🔧",
+					},
+					CustomID: "findChangeBtn",
 				})
 			}
-			vlanRow = discordgo.ActionsRow{
-				Components: []discordgo.MessageComponent{
-					discordgo.SelectMenu{
-						MaxValues:   1,
-						CustomID:    "findVlanSelect",
-						Placeholder: "Default VLAN",
-						Options:     vlanMenu,
-						Disabled:    !buttonsEnabled,
-					},
+		} else if len(user.Sessions) > 0 && !vlansMissing {
+			// User is not even logged in, but we at least have a session
+			actions = append(actions, discordgo.Button{
+				Label:    "Login",
+				Style:    discordgo.SuccessButton,
+				Disabled: !buttonsEnabled,
+				Emoji: discordgo.ComponentEmoji{
+					Name: "✔️",
 				},
-			}
+				CustomID: "findLoginBtn",
+			})
 		}
-	}
 
-	// Actions!
-	var actions []discordgo.MessageComponent
-	if loginVlan > 0 {
-		// User is logged in ... so we can log them out or change their VLAN
 		actions = append(actions, discordgo.Button{
-			Label:    "Logout",
-			Style:    discordgo.DangerButton,
+			Label:    "Cancel",
+			Style:    discordgo.SecondaryButton,
 			Disabled: !buttonsEnabled,
 			Emoji: discordgo.ComponentEmoji{
 				Name: "✖️",
 			},
-			CustomID: "findLogoutBtn",
+			CustomID: "findCancelBtn",
 		})
-		if !vlansMissing {
-			actions = append(actions, discordgo.Button{
-				Label:    "Change VLAN",
-				Style:    discordgo.PrimaryButton,
-				Disabled: !buttonsEnabled,
-				Emoji: discordgo.ComponentEmoji{
-					Name: "🔧",
-				},
-				CustomID: "findChangeBtn",
-			})
-		}
-	} else if len(user.Sessions) > 0 && !vlansMissing {
-		// User is not even logged in, but we at least have a session
-		actions = append(actions, discordgo.Button{
-			Label:    "Login",
-			Style:    discordgo.SuccessButton,
-			Disabled: !buttonsEnabled,
-			Emoji: discordgo.ComponentEmoji{
-				Name: "✔️",
-			},
-			CustomID: "findLoginBtn",
-		})
-	}
 
-	if !vlansMissing {
-		card.Components = append(card.Components, vlanRow)
+		if !vlansMissing {
+			card.Components = append(card.Components, vlanRow)
+		}
+		card.Components = append(card.Components, discordgo.ActionsRow{
+			Components: actions,
+		})
 	}
-	card.Components = append(card.Components, discordgo.ActionsRow{
-		Components: actions,
-	})
 
 	return card, nil
 }
