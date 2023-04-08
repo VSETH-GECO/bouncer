@@ -227,6 +227,8 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 					},
 				}
 			}
+		} else {
+			vlansMissing = true
 		}
 
 		// Actions!
