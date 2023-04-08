@@ -3,7 +3,6 @@ package controller
 import (
 	"bytes"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"github.com/VSETH-GECO/bouncer/pkg/database"
 	"github.com/bwmarrin/discordgo"
@@ -99,6 +98,24 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 		user.Name = "_unknown_"
 	}
 
+	var extraFields []*discordgo.MessageEmbedField
+	if len(user.Sessions) > 0 {
+		online = online + " since " + convertDate(user.Sessions[0].StartDate)
+
+		if switchObj, err := dc.db.SwitchByIP(user.Sessions[0].SwitchIP.String()); err == nil {
+			extraFields = []*discordgo.MessageEmbedField{
+				{
+					Name:  "Switch name",
+					Value: switchObj.Hostname,
+				},
+				{
+					Name:  "Switch location",
+					Value: switchObj.Location,
+				},
+			}
+		}
+	}
+
 	card.Embeds = []*discordgo.MessageEmbed{
 		{
 			Title: "User info",
@@ -132,6 +149,10 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				},
 			},
 		},
+	}
+
+	if extraFields != nil {
+		card.Embeds[0].Fields = append(card.Embeds[0].Fields, extraFields...)
 	}
 
 	if !shortCard && len(user.Sessions) > 0 {
@@ -285,10 +306,6 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 		}
 	}
 
-	s, _ := json.MarshalIndent(card, "", "\t")
-	if s != nil {
-		fmt.Println(string(s))
-	}
 	return card, nil
 }
 
