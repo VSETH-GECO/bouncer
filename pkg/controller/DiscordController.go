@@ -3,6 +3,7 @@ package controller
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"github.com/VSETH-GECO/bouncer/pkg/database"
 	"github.com/bwmarrin/discordgo"
@@ -202,7 +203,6 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				log.WithField("ip", switchIP.String()).Warn("Unknown switch returned from RADIUS query!")
 			}
 			if err != nil || switchRef == nil {
-				vlanRow = discordgo.ActionsRow{}
 				vlansMissing = true
 			} else {
 				var vlanMenu []discordgo.SelectMenuOption
@@ -284,6 +284,10 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 		})
 	}
 
+	s, _ := json.MarshalIndent(card, "", "\t")
+	if s != nil {
+		fmt.Println(s)
+	}
 	return card, nil
 }
 
