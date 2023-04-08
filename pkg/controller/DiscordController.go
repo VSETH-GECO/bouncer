@@ -268,22 +268,21 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 			})
 		}
 
-		actions = append(actions, discordgo.Button{
-			Label:    "Cancel",
-			Style:    discordgo.SecondaryButton,
-			Disabled: !buttonsEnabled,
-			Emoji: discordgo.ComponentEmoji{
-				Name: "✖️",
-			},
-			CustomID: "findCancelBtn",
-		})
-
 		if !vlansMissing {
 			card.Components = append(card.Components, vlanRow)
+			actions = append(actions, discordgo.Button{
+				Label:    "Cancel",
+				Style:    discordgo.SecondaryButton,
+				Disabled: !buttonsEnabled,
+				Emoji: discordgo.ComponentEmoji{
+					Name: "✖️",
+				},
+				CustomID: "findCancelBtn",
+			})
+			card.Components = append(card.Components, discordgo.ActionsRow{
+				Components: actions,
+			})
 		}
-		card.Components = append(card.Components, discordgo.ActionsRow{
-			Components: actions,
-		})
 	}
 
 	s, _ := json.MarshalIndent(card, "", "\t")
