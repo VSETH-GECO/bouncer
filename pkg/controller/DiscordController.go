@@ -265,7 +265,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				Style:    discordgo.DangerButton,
 				Disabled: !buttonsEnabled,
 				Emoji: discordgo.ComponentEmoji{
-					Name: "✖️",
+					Name: "(x)",
 				},
 				CustomID: "findLogoutBtn",
 			})
@@ -275,7 +275,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 					Style:    discordgo.PrimaryButton,
 					Disabled: !buttonsEnabled,
 					Emoji: discordgo.ComponentEmoji{
-						Name: "🔧",
+						Name: "(w)",
 					},
 					CustomID: "findChangeBtn",
 				})
@@ -287,7 +287,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				Style:    discordgo.SuccessButton,
 				Disabled: !buttonsEnabled,
 				Emoji: discordgo.ComponentEmoji{
-					Name: "✔️",
+					Name: "(y)",
 				},
 				CustomID: "findLoginBtn",
 			})
@@ -300,7 +300,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				Style:    discordgo.SecondaryButton,
 				Disabled: !buttonsEnabled,
 				Emoji: discordgo.ComponentEmoji{
-					Name: "✖️",
+					Name: "(x)",
 				},
 				CustomID: "findCancelBtn",
 			})
