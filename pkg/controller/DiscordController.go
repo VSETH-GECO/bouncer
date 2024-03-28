@@ -264,9 +264,6 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				Label:    "Logout",
 				Style:    discordgo.DangerButton,
 				Disabled: !buttonsEnabled,
-				Emoji: discordgo.ComponentEmoji{
-					Name: "(x)",
-				},
 				CustomID: "findLogoutBtn",
 			})
 			if !vlansMissing {
@@ -274,9 +271,6 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 					Label:    "Change VLAN",
 					Style:    discordgo.PrimaryButton,
 					Disabled: !buttonsEnabled,
-					Emoji: discordgo.ComponentEmoji{
-						Name: "(w)",
-					},
 					CustomID: "findChangeBtn",
 				})
 			}
@@ -286,9 +280,6 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				Label:    "Login",
 				Style:    discordgo.SuccessButton,
 				Disabled: !buttonsEnabled,
-				Emoji: discordgo.ComponentEmoji{
-					Name: "(y)",
-				},
 				CustomID: "findLoginBtn",
 			})
 		}
@@ -299,9 +290,6 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				Label:    "Cancel",
 				Style:    discordgo.SecondaryButton,
 				Disabled: !buttonsEnabled,
-				Emoji: discordgo.ComponentEmoji{
-					Name: "(x)",
-				},
 				CustomID: "findCancelBtn",
 			})
 			card.Components = append(card.Components, discordgo.ActionsRow{
