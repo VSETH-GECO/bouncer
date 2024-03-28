@@ -2,10 +2,12 @@ package discord
 
 import (
 	"fmt"
-	"github.com/VSETH-GECO/bouncer/pkg/database"
+	"strings"
+
 	"github.com/bwmarrin/discordgo"
 	log "github.com/sirupsen/logrus"
-	"strings"
+
+	"github.com/VSETH-GECO/bouncer/pkg/database"
 )
 
 const (
@@ -155,7 +157,7 @@ func (d *Discord) handleUserSubcommand(s *discordgo.Session, i *discordgo.Intera
 		})
 
 		if err != nil {
-			log.WithError(err).Warn("Error during discord reply")
+			log.WithError(err).Warn("Error during discord reply: 'invalid user query'")
 		}
 		return
 	}
@@ -181,7 +183,7 @@ func (d *Discord) handleUserSubcommand(s *discordgo.Session, i *discordgo.Intera
 		})
 
 		if err != nil {
-			log.WithError(err).Warn("Error during discord reply")
+			log.WithError(err).Warn("Error during discord reply: 'user query failed'")
 		}
 		return
 	}
@@ -197,7 +199,7 @@ func (d *Discord) handleUserSubcommand(s *discordgo.Session, i *discordgo.Intera
 	})
 
 	if err != nil {
-		log.WithError(err).Warn("Error during discord reply")
+		log.WithError(err).Warn("Error during discord reply: 'final result'")
 	}
 }
 
@@ -225,7 +227,7 @@ func (d *Discord) handlePatchSubcommand(s *discordgo.Session, i *discordgo.Inter
 				Type: discordgo.InteractionResponseDeferredMessageUpdate,
 			})
 			if err != nil {
-				log.WithError(err).Warn("Error during discord reply")
+				log.WithError(err).Warn("Error during discord reply: 'find vlan select'")
 			}
 		} else if data.CustomID == "findLogoutBtn" || data.CustomID == "findLoginBtn" || data.CustomID == "findChangeBtn" || data.CustomID == "findCancelBtn" {
 			var message string
@@ -313,7 +315,7 @@ func (d *Discord) handlePatchSubcommand(s *discordgo.Session, i *discordgo.Inter
 				},
 			})
 			if err != nil {
-				log.WithError(err).Warn("Error during discord reply")
+				log.WithError(err).Warn("Error during discord reply: 'unknown interaction request'")
 			}
 		}
 	}
