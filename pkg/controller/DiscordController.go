@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
-	"github.com/VSETH-GECO/bouncer/pkg/database"
+
 	"github.com/bwmarrin/discordgo"
 	"github.com/olekukonko/tablewriter"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/VSETH-GECO/bouncer/pkg/database"
 )
 
 type DiscordController struct {
@@ -75,9 +77,9 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 	var online string
 	var loggedIn string
 	if len(user.Sessions) > 0 && !user.Sessions[0].EndDate.Valid {
-		online = "✅"
+		online = "(y)"
 	} else {
-		online = "❌"
+		online = "(x)"
 	}
 
 	loginVlan, err := dc.db.CheckUserSignedInNoTx(user.Mac)
@@ -86,9 +88,9 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 		return nil, err
 	}
 	if loginVlan > 0 {
-		loggedIn = "✅"
+		loggedIn = "(y)"
 	} else {
-		loggedIn = "❌"
+		loggedIn = "(x)"
 	}
 
 	if user.Hostname == "" {
