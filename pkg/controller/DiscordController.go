@@ -204,6 +204,8 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				convertData(session.BytesReceived),
 				convertData(session.BytesSent),
 			}
+			log.Debugf("Start: '%s' End: '%s' End reason: '%s' Switch name (+loc): '%s' Switch port: '%s' Assigned IP: '%s' Received: '%s' Send: '%s' ",
+				row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7])
 
 			table.Append(row)
 		}
@@ -215,6 +217,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 	} else {
 		card.Content = "No session found for this user, check back once they're plugged in."
 	}
+	log.Debugf("user card content: '%s'", card.Content)
 
 	if !shortCard {
 		// Available VLANs
@@ -230,8 +233,10 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				log.WithField("ip", switchIP.String()).Warn("Unknown switch returned from RADIUS query!")
 			}
 			if err != nil || switchRef == nil {
+				log.Debug("vlan is missing")
 				vlansMissing = true
 			} else {
+				log.Debug("crafting vlan menu")
 				var vlanMenu []discordgo.SelectMenuOption
 				for _, vlan := range switchRef.Vlans {
 					isDefault := switchRef.PrimaryVlan == vlan
