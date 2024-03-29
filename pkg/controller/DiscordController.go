@@ -237,27 +237,30 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				vlansMissing = true
 			} else {
 				log.Debug("crafting vlan menu")
-				var vlanMenu []discordgo.SelectMenuOption
-				for _, vlan := range switchRef.Vlans {
-					isDefault := switchRef.PrimaryVlan == vlan
-					vlanMenu = append(vlanMenu, discordgo.SelectMenuOption{
-						Description: vlan.Description,
-						Value:       fmt.Sprint(vlan.VlanID),
-						Label:       fmt.Sprintf("VLAN %d (%s) - %s", vlan.VlanID, vlan.Name, vlan.IpRange.String()),
-						Default:     isDefault,
-					})
-				}
-				vlanRow = discordgo.ActionsRow{
-					Components: []discordgo.MessageComponent{
-						discordgo.SelectMenu{
-							MaxValues:   1,
-							CustomID:    "findVlanSelect",
-							Placeholder: "Default VLAN",
-							Options:     vlanMenu,
-							Disabled:    !buttonsEnabled,
+				/*
+					skip vlan menu because of https://github.com/bwmarrin/discordgo/pull/1476
+					var vlanMenu []discordgo.SelectMenuOption
+					for _, vlan := range switchRef.Vlans {
+						isDefault := switchRef.PrimaryVlan == vlan
+						vlanMenu = append(vlanMenu, discordgo.SelectMenuOption{
+							Description: vlan.Description,
+							Value:       fmt.Sprint(vlan.VlanID),
+							Label:       fmt.Sprintf("VLAN %d (%s) - %s", vlan.VlanID, vlan.Name, vlan.IpRange.String()),
+							Default:     isDefault,
+						})
+					}
+					vlanRow = discordgo.ActionsRow{
+						Components: []discordgo.MessageComponent{
+							discordgo.SelectMenu{
+								MaxValues:   1,
+								CustomID:    "findVlanSelect",
+								Placeholder: "Default VLAN",
+								Options:     vlanMenu,
+								Disabled:    !buttonsEnabled,
+							},
 						},
-					},
-				}
+					}
+				*/
 			}
 		} else {
 			vlansMissing = true
