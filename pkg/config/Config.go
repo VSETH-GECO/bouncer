@@ -107,7 +107,7 @@ func writebackConfig() {
 }
 
 func RegisterGlobalArguments(flags *pflag.FlagSet) {
-	registerBool(flags, "verbose", false, "Output verbose log messages", &CurrentOptions.Verbose)
+	registerBool(flags, "verbose", true, "Output verbose log messages", &CurrentOptions.Verbose)
 	registerString(flags, "database", "", "Database to use", &CurrentOptions.DBDatabase)
 	registerString(flags, "host", "", "Database host", &CurrentOptions.DBHost)
 	registerString(flags, "user", "", "Database user", &CurrentOptions.DBUser)
