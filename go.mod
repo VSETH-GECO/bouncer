@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/blind-oracle/go-radius v0.0.0-20220921154059-f1edeb7fcffd
-	github.com/bwmarrin/discordgo v0.26.1
+	github.com/bwmarrin/discordgo v0.26.3
 	github.com/golang-migrate/migrate/v4 v4.15.2
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/prometheus/client_golang v1.13.0
