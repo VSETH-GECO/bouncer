@@ -8,6 +8,7 @@ import (
 type User struct {
 	Mac      string
 	IP       net.IP
+	IP6      net.IP
 	Hostname string
 	Name     string
 	Email    string
@@ -97,6 +98,25 @@ func (h *Handler) LoadUser(mac string) (*User, error) {
 		user.IP = net.ParseIP(ipStr)
 		if user.IP == nil {
 			user.IP = net.IP{}
+		}
+	}
+
+	res, err = h.connection.Query("SELECT INET6_NTOA(address) FROM lease6 WHERE hwaddr=UNHEX(?)", mac)
+	if err != nil {
+		Close(res)
+		return nil, err
+	}
+
+	if res.Next() {
+		var ip6Str string
+		err = res.Scan(&ip6Str)
+		if err != nil {
+			Close(res)
+			return nil, err
+		}
+		user.IP6 = net.ParseIP(ip6Str)
+		if user.IP6 == nil {
+			user.IP6 = net.IP{}
 		}
 	}
 

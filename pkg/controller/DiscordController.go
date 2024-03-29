@@ -141,6 +141,11 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 					Inline: true,
 				},
 				{
+					Name:   "IPv6",
+					Value:  user.IP6.String(),
+					Inline: true,
+				},
+				{
 					Name:   "Username",
 					Value:  user.Name,
 					Inline: true,

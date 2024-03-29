@@ -19,6 +19,20 @@ func (h *Handler) FindMACByIP(ip string) (mac string, err error) {
 	return
 }
 
+// FindMACByIPv6 finds a client's MAC from it's DHCPv6 lease
+func (h *Handler) FindMACByIPv6(ip string) (mac string, err error) {
+	rows, err := h.connection.Query("SELECT hex(hwaddr) FROM lease6 WHERE INET6_NTOA(address)=?;", ip)
+	defer Close(rows)
+	if err != nil {
+		return
+	}
+	if !rows.Next() {
+		return
+	}
+	err = rows.Scan(&mac)
+	return
+}
+
 func (h *Handler) ClearLeasesForMAC(tx *sql.Tx, mac string) (string, *net.IP, error) {
 	res, err := tx.Query("SELECT hostname, INET_NTOA(address) FROM lease4 WHERE hwaddr = UNHEX(?) ORDER BY expire DESC limit 1;", mac)
 	if err != nil {
@@ -41,5 +55,10 @@ func (h *Handler) ClearLeasesForMAC(tx *sql.Tx, mac string) (string, *net.IP, er
 	Close(res)
 
 	_, err = tx.Exec("DELETE FROM lease4 WHERE hwaddr = UNHEX(?);", mac)
+	if err != nil {
+		return hostname, &ip, err
+	}
+
+	_, err = tx.Exec("DELETE FROM lease6 WHERE hwaddr = UNHEX(?);", mac)
 	return hostname, &ip, err
 }
