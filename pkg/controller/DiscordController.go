@@ -204,9 +204,6 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				convertData(session.BytesReceived),
 				convertData(session.BytesSent),
 			}
-			log.Debugf("Start: '%s' End: '%s' End reason: '%s' Switch name (+loc): '%s' Switch port: '%s' Assigned IP: '%s' Received: '%s' Send: '%s' ",
-				row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7])
-
 			table.Append(row)
 		}
 		table.Render()
@@ -217,7 +214,6 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 	} else {
 		card.Content = "No session found for this user, check back once they're plugged in."
 	}
-	log.Debugf("user card content: '%s'", card.Content)
 
 	if !shortCard {
 		// Available VLANs
@@ -271,6 +267,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 		var actions []discordgo.MessageComponent
 		if loginVlan > 0 {
 			// User is logged in ... so we can log them out or change their VLAN
+			log.Debug("adding 'logout button' to action menu")
 			actions = append(actions, discordgo.Button{
 				Label:    "Logout",
 				Style:    discordgo.DangerButton,
@@ -278,6 +275,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				CustomID: "findLogoutBtn",
 			})
 			if !vlansMissing {
+				log.Debug("adding 'change vlan' button to action menu")
 				actions = append(actions, discordgo.Button{
 					Label:    "Change VLAN",
 					Style:    discordgo.PrimaryButton,
@@ -287,6 +285,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 			}
 		} else if len(user.Sessions) > 0 && !vlansMissing {
 			// User is not even logged in, but we at least have a session
+			log.Debug("adding 'login' button to action menu")
 			actions = append(actions, discordgo.Button{
 				Label:    "Login",
 				Style:    discordgo.SuccessButton,
@@ -299,6 +298,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 			/*
 				card.Components = append(card.Components, vlanRow)
 			*/
+			log.Debug("adding 'cancel' button to action menu")
 			actions = append(actions, discordgo.Button{
 				Label:    "Cancel",
 				Style:    discordgo.SecondaryButton,

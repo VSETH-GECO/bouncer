@@ -189,10 +189,6 @@ func (d *Discord) handleUserSubcommand(s *discordgo.Session, i *discordgo.Intera
 	}
 	d.macCache[i.Interaction.ID] = userCard.RealMAC
 
-	log.Debugf("user card content: '%s'", userCard.Content)
-	log.Debugf("user card components: '%v'", userCard.Components)
-	log.Debugf("user card embeds: '%v'", userCard.Embeds)
-
 	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
