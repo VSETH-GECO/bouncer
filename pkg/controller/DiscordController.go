@@ -221,7 +221,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 
 	if !shortCard {
 		// Available VLANs
-		var vlanRow discordgo.ActionsRow
+		// var vlanRow discordgo.ActionsRow
 		vlansMissing := false
 		if len(user.Sessions) > 0 {
 			switchIP := user.Sessions[0].SwitchIP
@@ -263,6 +263,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 				*/
 			}
 		} else {
+			log.Debug("vlan is missing")
 			vlansMissing = true
 		}
 
@@ -295,16 +296,20 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 		}
 
 		if !vlansMissing {
-			card.Components = append(card.Components, vlanRow)
+			/*
+				card.Components = append(card.Components, vlanRow)
+			*/
 			actions = append(actions, discordgo.Button{
 				Label:    "Cancel",
 				Style:    discordgo.SecondaryButton,
 				Disabled: !buttonsEnabled,
 				CustomID: "findCancelBtn",
 			})
-			card.Components = append(card.Components, discordgo.ActionsRow{
-				Components: actions,
-			})
+			/*
+				card.Components = append(card.Components, discordgo.ActionsRow{
+					Components: actions,
+				})
+			*/
 		}
 	}
 
