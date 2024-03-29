@@ -29,7 +29,20 @@ func (h *Handler) FindMAC(value string) (mac string, err error) {
 	}
 
 	// Let's see if we can find the user by hostname or IP instead
-	res, err = h.connection.Query("SELECT HEX(hwaddr) FROM lease4 WHERE hostname = ? or address=INET_ATON(?) or hwaddr=UNHEX(?);", value, value, value)
+	hostNameCondition := value + ".lan.geco.ethz.ch."
+	res, err = h.connection.Query("SELECT HEX(hwaddr) FROM lease4 WHERE hostname = ? or address=INET_ATON(?) or hwaddr=UNHEX(?);", hostNameCondition, value, value)
+	if err != nil {
+		return
+	}
+	defer Close(res)
+
+	if res.Next() {
+		err = res.Scan(&mac)
+		return
+	}
+
+	// Maybe its an ipv6?
+	res, err = h.connection.Query("SELECT HEX(hwaddr) FROM lease6 WHERE address=INET6_ATON(?);", value)
 	if err != nil {
 		return
 	}
