@@ -115,6 +115,10 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 					Value: switchObj.Hostname,
 				},
 				{
+					Name:  "Switch port",
+					Value: user.Sessions[0].SwitchPort,
+				},
+				{
 					Name:  "Switch location",
 					Value: switchObj.Location,
 				},
