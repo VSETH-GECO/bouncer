@@ -1,11 +1,12 @@
 package database
 
 import (
+	"strconv"
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	log "github.com/sirupsen/logrus"
-	"strconv"
-	"time"
 )
 
 var (
@@ -61,8 +62,7 @@ func (p *PrometheusHandler) getIntValWithSQL(query string) (value int, ok bool) 
 	}
 	defer res.Close()
 	if !res.Next() {
-		log.Warn("Empty result set")
-		return
+		return 0, true
 	}
 	err = res.Scan(&value)
 	if err != nil {
