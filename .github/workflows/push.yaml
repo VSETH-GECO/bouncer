@@ -2,7 +2,7 @@ name: Create and publish a Docker image
 
 on:
   push:
-    branches: ['master']
+    branches: ["master"]
 
 env:
   REGISTRY: ghcr.io
@@ -37,13 +37,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Update k8s repo
-        uses: mvasigh/dispatch-action@1.1.6
+        uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-          repo: k8s
-          owner: VSETH-GECO
-          event_type: bouncer
-          message: |
+          repository: VSETH-GECO/k8s
+          event-type: bouncer
+          client-payload: |
             {
               "tag": "${{ env.SHORT_SHA }}"
             }
