@@ -173,7 +173,7 @@ func (d *Discord) handleUserSubcommand(s *discordgo.Session, i *discordgo.Intera
 		searchString = strings.ToLower(searchString)
 	}
 
-	userCard, err := d.dc.GetDiscordUserCard(searchString, true, !isPatchCommand)
+	userCard, err := d.dc.GetDiscordUserCard(searchString, true, isPatchCommand)
 	if err != nil {
 		err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,

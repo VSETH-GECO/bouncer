@@ -46,7 +46,7 @@ func convertData(data int) string {
 	return fmt.Sprint(data)
 }
 
-func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnabled bool, shortCard bool) (*UserCard, error) {
+func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnabled bool, longCard bool) (*UserCard, error) {
 	card := &UserCard{
 		Content: "",
 	}
@@ -170,7 +170,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 		card.Embeds[0].Fields = append(card.Embeds[0].Fields, extraFields...)
 	}
 
-	if !shortCard && len(user.Sessions) > 0 {
+	if longCard && len(user.Sessions) > 0 {
 		// We have RADIUS data, so lets put that in here
 		buf := bytes.Buffer{}
 		table := tablewriter.NewWriter(&buf)
@@ -218,13 +218,13 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 		table.Render()
 
 		card.Content = "Sessions in descending order:\n```md\n" + buf.String() + "\n```"
-	} else if shortCard {
+	} else if !longCard {
 		card.Content = "User found, showing you their card"
 	} else {
 		card.Content = "No session found for this user, check back once they're plugged in."
 	}
 
-	if !shortCard {
+	if longCard {
 		// Available VLANs
 		var vlanRow discordgo.ActionsRow
 		vlansMissing := false
