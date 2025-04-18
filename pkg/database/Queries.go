@@ -17,7 +17,7 @@ type User struct {
 
 // FindMAC tries to find a user's MAC by any of their fields
 func (h *Handler) FindMAC(value string) (mac string, err error) {
-	res, err := h.connection.Query("SELECT mac FROM login_logs WHERE LOWER(username)=LOWER(?) or LOWER(mac)=LOWER(?);", value, value)
+	res, err := h.connection.Query("SELECT mac FROM login_logs WHERE LOWER(username)=LOWER(?) or LOWER(mac)=LOWER(?) ORDER BY updated_at DESC;", value, value)
 	if err != nil {
 		return
 	}
@@ -54,7 +54,7 @@ func (h *Handler) FindMAC(value string) (mac string, err error) {
 	}
 
 	// Neither MAC nor hostname nor IP - maybe username?
-	res, err = h.connection.Query("SELECT mac FROM login_logs WHERE username=?", value)
+	res, err = h.connection.Query("SELECT mac FROM login_logs WHERE username=? ORDER BY updated_at DESC;", value)
 	if err != nil {
 		return
 	}
@@ -73,7 +73,7 @@ func (h *Handler) LoadUser(mac string) (*User, error) {
 		Mac: mac,
 	}
 
-	res, err := h.connection.Query("SELECT username FROM login_logs WHERE mac=?", mac)
+	res, err := h.connection.Query("SELECT username FROM login_logs WHERE mac=? ORDER BY updated_at DESC;", mac)
 	if err != nil {
 		Close(res)
 		return nil, err
@@ -95,7 +95,7 @@ func (h *Handler) LoadUser(mac string) (*User, error) {
 	}
 	Close(res)
 
-	res, err = h.connection.Query("SELECT hostname, INET_NTOA(address) FROM lease4 WHERE hwaddr=UNHEX(?)", mac)
+	res, err = h.connection.Query("SELECT hostname, INET_NTOA(address) FROM lease4 WHERE hwaddr=UNHEX(?);", mac)
 	if err != nil {
 		Close(res)
 		return nil, err
@@ -114,7 +114,7 @@ func (h *Handler) LoadUser(mac string) (*User, error) {
 		}
 	}
 
-	res, err = h.connection.Query("SELECT INET6_NTOA(address) FROM lease6 WHERE hwaddr=UNHEX(?)", mac)
+	res, err = h.connection.Query("SELECT INET6_NTOA(address) FROM lease6 WHERE hwaddr=UNHEX(?);", mac)
 	if err != nil {
 		Close(res)
 		return nil, err
