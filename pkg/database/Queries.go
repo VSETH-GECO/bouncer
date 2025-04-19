@@ -29,8 +29,8 @@ func (h *Handler) FindMAC(value string) (mac string, err error) {
 	}
 
 	// Let's see if we can find the user by hostname or IP instead
-	hostNameCondition := value + ".lan.geco.ethz.ch"
-	res, err = h.connection.Query("SELECT HEX(hwaddr) FROM lease4 WHERE hostname LIKE '?%' or address=INET_ATON(?) or hwaddr=UNHEX(?);", hostNameCondition, value, value)
+	hostNameCondition := value + ".lan.geco.ethz.ch" + "%" // wildcard at the end because some end with a dot and some not
+	res, err = h.connection.Query("SELECT HEX(hwaddr) FROM lease4 WHERE hostname LIKE ? or address=INET_ATON(?) or hwaddr=UNHEX(?);", hostNameCondition, value, value)
 	if err != nil {
 		return
 	}
