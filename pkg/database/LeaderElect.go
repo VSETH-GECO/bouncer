@@ -3,12 +3,13 @@ package database
 import (
 	"database/sql"
 	"errors"
-	log "github.com/sirupsen/logrus"
 	"math/rand"
 	"os"
 	"os/signal"
 	"strconv"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // LeaderElect provides a poor man's leader election based on our shared SQL database
@@ -146,7 +147,7 @@ func (l *LeaderElect) releaseLockOnShutdown(lock int) {
 		}
 	}
 
-	sigChan := make(chan os.Signal)
+	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, os.Kill)
 
 	go func() {
