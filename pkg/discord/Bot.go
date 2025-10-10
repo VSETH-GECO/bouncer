@@ -73,17 +73,11 @@ func (d *Discord) Setup() {
 			log.WithError(err).Fatal("Couldn't setup discord handlers")
 		}
 
-		err = nil
-		//_, err = discord.ChannelMessageSend(d.logChannel, "I am awake!")
-		if err != nil {
-			log.WithError(err).Warning("Couldn't send message")
-		} else {
-			// Everything seems good
-			log.AddHook(&discordLogger{
-				s:          discord,
-				logChannel: d.logChannel,
-			})
-		}
+		// Everything seems good
+		log.AddHook(&discordLogger{
+			s:          discord,
+			logChannel: d.logChannel,
+		})
 	} else {
 		log.Warning("Discord config missing or incomplete")
 	}
