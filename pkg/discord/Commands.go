@@ -28,6 +28,9 @@ func (d *Discord) migrateCommands(s *discordgo.Session) error {
 	}
 
 	tx, err := d.db.BeginTx()
+	if err != nil {
+		return err
+	}
 	defer database.Rollback(tx)
 
 	switch version {
