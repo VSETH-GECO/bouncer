@@ -55,17 +55,6 @@ func (h *Handler) FindMAC(value string) (mac string, err error) {
 		return
 	}
 
-	// Neither MAC nor hostname nor IP - maybe username?
-	res, err = h.connection.Query("SELECT mac FROM login_logs WHERE username=? ORDER BY updated_at DESC;", value)
-	if err != nil {
-		return
-	}
-	defer Close(res)
-
-	if res.Next() {
-		err = res.Scan(&mac)
-	}
-
 	return
 }
 
