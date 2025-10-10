@@ -190,7 +190,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 
 func (dc *DiscordController) renderLastSessions(buf *bytes.Buffer, sessions []*database.RadiusSession) {
 	table := tablewriter.NewWriter(buf)
-	table.SetHeader([]string{
+	table.Header([]string{
 		"Start",
 		"End",
 		"End reason",
@@ -251,7 +251,7 @@ func (dc *DiscordController) assembleActions(card *UserCard, user *database.User
 			Label:    "Logout",
 			Style:    discordgo.DangerButton,
 			Disabled: !buttonsEnabled,
-			Emoji: discordgo.ComponentEmoji{
+			Emoji: &discordgo.ComponentEmoji{
 				Name: "✖️",
 			},
 			CustomID: "findLogoutBtn",
@@ -262,7 +262,7 @@ func (dc *DiscordController) assembleActions(card *UserCard, user *database.User
 				Label:    "Change VLAN",
 				Style:    discordgo.PrimaryButton,
 				Disabled: !buttonsEnabled,
-				Emoji: discordgo.ComponentEmoji{
+				Emoji: &discordgo.ComponentEmoji{
 					Name: "🔧",
 				},
 				CustomID: "findChangeBtn",
@@ -275,7 +275,7 @@ func (dc *DiscordController) assembleActions(card *UserCard, user *database.User
 			Label:    "Login",
 			Style:    discordgo.SuccessButton,
 			Disabled: !buttonsEnabled,
-			Emoji: discordgo.ComponentEmoji{
+			Emoji: &discordgo.ComponentEmoji{
 				Name: "✔️",
 			},
 			CustomID: "findLoginBtn",
@@ -289,7 +289,7 @@ func (dc *DiscordController) assembleActions(card *UserCard, user *database.User
 			Label:    "Cancel",
 			Style:    discordgo.SecondaryButton,
 			Disabled: !buttonsEnabled,
-			Emoji: discordgo.ComponentEmoji{
+			Emoji: &discordgo.ComponentEmoji{
 				Name: "✖️",
 			},
 			CustomID: "findCancelBtn",

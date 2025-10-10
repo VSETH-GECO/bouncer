@@ -3,6 +3,7 @@
 This software can be used to bounce ports on switches.
 
 ## Rationale
+
 When deploying FreeRADIUS and kea with our roles and pointing switches to them, you
 can already dynamically assign users to VLANs using their MAC. However, moving them
 between VLANs will still require manual intervention as changing the RADIUS entries
@@ -16,32 +17,39 @@ a little bit cumbersome to script. That's where this software comes in: You poin
 it to the RADIUS database, give it the CoA secret you set on the switches and it
 will do everything for you. Specifically, there will be a table called `bouncer_jobs`.
 Insert a client's MAC and it's target VLAN into this table and bouncer will
- * Find the client's RADIUS settings and update them to the new VLAN
- * Figure out the current running RADIUS session it belongs to
- * Send a CoA to the respective switch
+
+* Find the client's RADIUS settings and update them to the new VLAN
+* Figure out the current running RADIUS session it belongs to
+* Send a CoA to the respective switch
 
 At the moment, we use Cisco's proprietary `AVPair` command, so the switch port will
 _physically_ toggle, therefore the client will also fetch a new DHCP lease if needed!
 
 ## Build
+
 This requires golang >= 1.11 and optionally a debian machine/container, in case you
 want to build the package. You'll also need [go-bindata](https://github.com/kevinburke/go-bindata)
 in your path, just do
+
+```bash
+go install github.com/kevinburke/go-bindata/v4/...@latest
 ```
-go get -u github.com/kevinburke/go-bindata/...
-```
+
 in case you have `$GOPATH/bin` in your path.
 You'll then need to generate sources using
-```
+
+```bash
 go generate github.com/VSETH-GECO/bouncer/...
 ```
 
 For the debian package:
-```
+
+```bash
 dpkg-buildpackage -b -us -uc
 ```
 
 Binary only:
-```
+
+```bash
 go build -o bouncer github.com/VSETH-GECO/bouncer/cmd
 ```
