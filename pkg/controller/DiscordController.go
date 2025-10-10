@@ -47,13 +47,14 @@ func convertData(data int) string {
 }
 
 func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnabled bool, longCard bool) (*UserCard, error) {
+	l := log.WithField("search", searchString)
 	card := &UserCard{
 		Content: "",
 	}
 
 	mac, err := dc.db.FindMAC(searchString)
 	if err != nil {
-		log.WithError(err).Warn("User MAC lookup failed!")
+		l.WithError(err).Warn("User MAC lookup failed!")
 		return nil, err
 	}
 
@@ -66,7 +67,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 
 	user, err := dc.db.LoadUser(mac)
 	if err != nil {
-		log.WithError(err).Warn("Load user failed!")
+		l.WithError(err).Warn("Load user failed!")
 		return nil, err
 	}
 	if user == nil {
@@ -84,7 +85,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 
 	vlan, err := dc.db.CheckUserSignedInNoTx(user.Mac)
 	if err != nil {
-		log.WithError(err).Warn("Check user signed in failed!")
+		l.WithError(err).Warn("Check user signed in failed!")
 		return nil, err
 	}
 	if vlan > 0 {

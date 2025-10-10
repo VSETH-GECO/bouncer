@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"net"
 	"strings"
 )
@@ -17,9 +18,10 @@ type User struct {
 
 // FindMAC tries to find a user's MAC by any of their fields
 func (h *Handler) FindMAC(value string) (mac string, err error) {
+	// find by username or MAC
 	res, err := h.connection.Query("SELECT mac FROM login_logs WHERE LOWER(username)=LOWER(?) or LOWER(mac)=LOWER(?) ORDER BY updated_at DESC;", value, value)
 	if err != nil {
-		return
+		return "", fmt.Errorf("failed to find MAC from login logs: %w", err)
 	}
 	defer Close(res)
 
@@ -32,7 +34,7 @@ func (h *Handler) FindMAC(value string) (mac string, err error) {
 	hostNameCondition := value + ".lan.geco.ethz.ch" + "%" // wildcard at the end because some end with a dot and some not
 	res, err = h.connection.Query("SELECT HEX(hwaddr) FROM lease4 WHERE hostname LIKE ? or address=INET_ATON(?) or hwaddr=UNHEX(?);", hostNameCondition, value, value)
 	if err != nil {
-		return
+		return "", fmt.Errorf("failed to find MAC from lease4: %w", err)
 	}
 	defer Close(res)
 
@@ -44,7 +46,7 @@ func (h *Handler) FindMAC(value string) (mac string, err error) {
 	// Maybe its an ipv6?
 	res, err = h.connection.Query("SELECT HEX(hwaddr) FROM lease6 WHERE address=INET6_ATON(?);", value)
 	if err != nil {
-		return
+		return "", fmt.Errorf("failed to find MAC from lease6: %w", err)
 	}
 	defer Close(res)
 
