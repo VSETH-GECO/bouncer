@@ -1,6 +1,8 @@
 package discord
 
 import (
+	"slices"
+
 	"github.com/VSETH-GECO/bouncer/pkg/config"
 	"github.com/VSETH-GECO/bouncer/pkg/controller"
 	"github.com/VSETH-GECO/bouncer/pkg/database"
@@ -88,10 +90,5 @@ func (d *Discord) Setup() {
 }
 
 func (d *Discord) IsAuthorized(name string) bool {
-	for _, user := range d.allowedUsers {
-		if name == user {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(d.allowedUsers, name)
 }
