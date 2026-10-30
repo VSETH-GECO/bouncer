@@ -88,7 +88,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 		l.WithError(err).Warn("Check user signed in failed!")
 		return nil, err
 	}
-	if vlan > 0 {
+	if vlan > 0 && vlan != 499 {
 		loggedIn = "✅"
 	} else {
 		loggedIn = "❌"
@@ -245,7 +245,7 @@ func (dc *DiscordController) assembleActions(card *UserCard, user *database.User
 
 	// Actions!
 	var actions []discordgo.MessageComponent
-	if vlan > 0 {
+	if vlan > 0 && vlan != 499 {
 		// User is logged in ... so we can log them out or change their VLAN
 		log.Debug("adding 'logout button' to action menu")
 		actions = append(actions, discordgo.Button{
