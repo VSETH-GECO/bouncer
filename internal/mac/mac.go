@@ -3,73 +3,55 @@ package mac
 import (
 	"encoding/hex"
 	"fmt"
-	"strings"
 )
 
 // MAC represents a 6-byte MAC address.
 type MAC [6]byte
 
 // Parse parses a MAC address string in one of three forms:
-// - Six groups of two hex digits separated by ':' (e.g., "00:11:22:33:44:55")
-// - Six groups of two hex digits separated by '-' (e.g., "00-11-22-33-44-55")
-// - Twelve bare hex digits (e.g., "001122334455")
+//   - 17 characters with ':' at positions 2, 5, 8, 11 and 14 (e.g., "00:11:22:33:44:55")
+//   - 17 characters with '-' at those same positions (e.g., "00-11-22-33-44-55")
+//   - 12 characters of bare hex digits (e.g., "001122334455")
 //
-// Letters in hex digits can be any case.
-// Returns a descriptive error if the input is invalid.
+// Hex digits can be in either case. Any other length, a separator off the
+// grid, or mixed separators is rejected. The error wraps the hex decoding
+// error when a character is not a hex digit.
 func Parse(s string) (MAC, error) {
 	if s == "" {
 		return MAC{}, fmt.Errorf("parse MAC: empty input")
 	}
 
 	var hexStr string
-
-	// Check for colon-separated form
-	if strings.Count(s, ":") == 5 {
-		parts := strings.Split(s, ":")
-		if len(parts) != 6 {
+	switch len(s) {
+	case 12:
+		hexStr = s
+	case 17:
+		sep := s[2]
+		if sep != ':' && sep != '-' {
 			return MAC{}, fmt.Errorf("parse MAC: invalid format %q", s)
 		}
-		for _, part := range parts {
-			if len(part) != 2 {
-				return MAC{}, fmt.Errorf("parse MAC: invalid format %q", s)
+		digits := make([]byte, 0, 12)
+		for i := 0; i < len(s); i++ {
+			if i%3 == 2 {
+				if s[i] != sep {
+					return MAC{}, fmt.Errorf("parse MAC: invalid format %q", s)
+				}
+				continue
 			}
+			digits = append(digits, s[i])
 		}
-		hexStr = strings.ToLower(strings.Join(parts, ""))
-	} else if strings.Count(s, "-") == 5 {
-		// Check for dash-separated form
-		parts := strings.Split(s, "-")
-		if len(parts) != 6 {
-			return MAC{}, fmt.Errorf("parse MAC: invalid format %q", s)
-		}
-		for _, part := range parts {
-			if len(part) != 2 {
-				return MAC{}, fmt.Errorf("parse MAC: invalid format %q", s)
-			}
-		}
-		hexStr = strings.ToLower(strings.Join(parts, ""))
-	} else if strings.Count(s, ":") == 0 && strings.Count(s, "-") == 0 {
-		// Bare hex digits
-		if len(s) != 12 {
-			return MAC{}, fmt.Errorf("parse MAC: invalid format %q", s)
-		}
-		hexStr = strings.ToLower(s)
-	} else {
-		// Mixed separators or other invalid format
+		hexStr = string(digits)
+	default:
 		return MAC{}, fmt.Errorf("parse MAC: invalid format %q", s)
 	}
 
-	// Decode the hex string
-	bytes, err := hex.DecodeString(hexStr)
+	decoded, err := hex.DecodeString(hexStr)
 	if err != nil {
-		return MAC{}, fmt.Errorf("parse MAC: invalid hex in %q", s)
-	}
-
-	if len(bytes) != 6 {
-		return MAC{}, fmt.Errorf("parse MAC: invalid format %q", s)
+		return MAC{}, fmt.Errorf("parse MAC: invalid hex in %q: %w", s, err)
 	}
 
 	var result MAC
-	copy(result[:], bytes)
+	copy(result[:], decoded)
 	return result, nil
 }
 
@@ -86,7 +68,7 @@ func MustParse(s string) MAC {
 // FromBytes creates a MAC address from a byte slice.
 // Returns false if the slice is not exactly 6 bytes.
 func FromBytes(b []byte) (MAC, bool) {
-	if b == nil || len(b) != 6 {
+	if len(b) != 6 {
 		return MAC{}, false
 	}
 	var result MAC

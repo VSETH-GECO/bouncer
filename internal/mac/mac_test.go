@@ -1,6 +1,8 @@
 package mac
 
 import (
+	"encoding/hex"
+	"errors"
 	"testing"
 )
 
@@ -13,6 +15,8 @@ func TestParse_AcceptedForms(t *testing.T) {
 		{"00-11-22-33-44-55", "001122334455"},
 		{"001122334455", "001122334455"},
 		{"00:11:22:33:44:AB", "0011223344ab"},
+		{"00-11-22-33-44-AB", "0011223344ab"},
+		{"AABBCCDDEEFF", "aabbccddeeff"},
 	}
 
 	for _, tt := range tests {
@@ -32,11 +36,18 @@ func TestParse_Rejected(t *testing.T) {
 	tests := []struct {
 		input string
 	}{
-		{""},                  // empty
-		{"00:11:22:33:44"},    // too few
-		{"0011223344556677"},  // too many
-		{"zz:11:22:33:44:55"}, // non-hex
-		{"00:11-22:33:44:55"}, // mixed separators
+		{""},                   // empty
+		{"00:11:22:33:44"},     // too few
+		{"0011223344556677"},   // too many
+		{"zz:11:22:33:44:55"},  // non-hex
+		{"00:11-22:33:44:55"},  // mixed separators
+		{"00:11:22:33:44:5"},   // 16 chars
+		{"0:011:22:33:44:55"},  // 17 chars, separator off-grid
+		{"00:11:22:33:44:55:"}, // 18 chars
+		{"00:11:22:33:44:5g"},  // non-hex, right length
+		{"00112233445"},        // 11 bare
+		{"001122334455 "},      // trailing space
+		{"00:11:22:33:44:55\n"},
 	}
 
 	for _, tt := range tests {
@@ -46,6 +57,14 @@ func TestParse_Rejected(t *testing.T) {
 				t.Fatalf("Parse(%q) error = nil; want error", tt.input)
 			}
 		})
+	}
+}
+
+func TestParse_WrapsHexError(t *testing.T) {
+	_, err := Parse("zz:11:22:33:44:55")
+	var hexErr hex.InvalidByteError
+	if !errors.As(err, &hexErr) {
+		t.Fatalf("Parse error = %v, want it to wrap hex.InvalidByteError", err)
 	}
 }
 
