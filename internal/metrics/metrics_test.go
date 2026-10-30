@@ -2,6 +2,8 @@ package metrics
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"sync/atomic"
@@ -51,7 +53,14 @@ func gaugeValue(t *testing.T, g prometheus.Gauge) float64 {
 	return m.GetGauge().GetValue()
 }
 
+func resetVectors() {
+	usersActivePerSwitch.Reset()
+	usersActivePerVLAN.Reset()
+	usersAuthorizedPerVLAN.Reset()
+}
+
 func TestSample_DistinctUsers(t *testing.T) {
+	t.Cleanup(resetVectors)
 	ctx := context.Background()
 	tx := testdb.Tx(t)
 	const sw = "10.77.13.1" // unique to this test
@@ -84,5 +93,45 @@ func TestSample_DistinctUsers(t *testing.T) {
 	}
 	if got := gaugeValue(t, usersActivePerSwitch.WithLabelValues(sw)); got != 1 {
 		t.Errorf("active on %s = %v, want 1", sw, got)
+	}
+}
+
+type failingQuerier struct{}
+
+func (failingQuerier) ExecContext(context.Context, string, ...any) (sql.Result, error) {
+	return nil, errors.New("boom")
+}
+func (failingQuerier) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
+	return nil, errors.New("boom")
+}
+
+func TestSample_FailedQueryKeepsValues(t *testing.T) {
+	activePrev := gaugeValue(t, usersActive)
+	t.Cleanup(func() {
+		resetVectors()
+		usersActive.Set(activePrev)
+	})
+	const sw = "10.77.13.2" // unique to this test
+
+	usersActive.Set(7)
+	usersActivePerSwitch.WithLabelValues(sw).Set(5)
+
+	sample(context.Background(), failingQuerier{})
+
+	if got := gaugeValue(t, usersActive); got != 7 {
+		t.Errorf("usersActive = %v, want 7", got)
+	}
+	if got := gaugeValue(t, usersActivePerSwitch.WithLabelValues(sw)); got != 5 {
+		t.Errorf("active on %s = %v, want 5", sw, got)
+	}
+	ch := make(chan prometheus.Metric, 16)
+	usersActivePerSwitch.Collect(ch)
+	close(ch)
+	n := 0
+	for range ch {
+		n++
+	}
+	if n != 1 {
+		t.Errorf("usersActivePerSwitch has %d children, want 1", n)
 	}
 }
