@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/pkg/database"
 	"github.com/testcontainers/testcontainers-go"
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
@@ -96,6 +97,11 @@ func Run(ctx context.Context) (*Instance, error) {
 // Open connects a database.Handler to the instance.
 func (i *Instance) Open(ctx context.Context) (*database.Handler, error) {
 	return database.Open(ctx, i.Host, i.Port, i.User, i.Password, i.Database)
+}
+
+// OpenDB connects a db.DB to the instance.
+func (i *Instance) OpenDB(ctx context.Context) (*db.DB, error) {
+	return db.Open(ctx, db.Config{Host: i.Host, Port: i.Port, User: i.User, Password: i.Password, Database: i.Database})
 }
 
 // DSN returns a go-sql-driver DSN for the instance. multiStatements lets migrations run several statements per Exec,
