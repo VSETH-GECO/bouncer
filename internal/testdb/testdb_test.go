@@ -2,6 +2,7 @@ package testdb_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -60,5 +61,43 @@ func TestMigrationsApplyOnBaseSchema(t *testing.T) {
 	}
 	if nullable != "YES,YES" {
 		t.Fatalf("bouncer_log switchIP/switchPort nullable = %q, want YES,YES", nullable)
+	}
+}
+
+func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
+
+// TestSharedTxRollsBack checks that a test's writes through Tx are gone once its cleanup has run.
+func TestSharedTxRollsBack(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	t.Run("insert inside tx", func(t *testing.T) {
+		tx := testdb.Tx(t)
+		if _, err := tx.ExecContext(ctx, "INSERT INTO bouncer_jobs(clientMAC, targetVLAN) VALUES ('001122334455', 42)"); err != nil {
+			t.Fatalf("inserting inside the transaction: %v", err)
+		}
+		var n int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM bouncer_jobs WHERE clientMAC='001122334455'").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("row not visible inside its own transaction: count = %d", n)
+		}
+	})
+
+	var n int
+	rows, err := testdb.Shared(t).Querier().QueryContext(ctx, "SELECT COUNT(*) FROM bouncer_jobs WHERE clientMAC='001122334455'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatalf("count query returned no row: %v", rows.Err())
+	}
+	if err := rows.Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("row survived the rollback: count = %d", n)
 	}
 }
