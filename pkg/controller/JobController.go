@@ -1,14 +1,19 @@
 package controller
 
 import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"net"
+	"strings"
+	"time"
+
 	"github.com/VSETH-GECO/bouncer/pkg/database"
 	"github.com/VSETH-GECO/bouncer/pkg/radius"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	log "github.com/sirupsen/logrus"
-	"net"
-	"strings"
-	"time"
 )
 
 var (
@@ -42,97 +47,103 @@ func NewClientController(db *database.Handler, switchSecret string) *JobControll
 	}
 }
 
-// ProcessMoveVLANJob processes a job that moves a host between VLANs, taking care of all database updates
-func (c *JobController) ProcessMoveVLANJob(job *database.Job) error {
+// ProcessMoveVLANJob processes a job that moves a host between VLANs, taking care of all database updates. On success
+// the job is deleted from the queue in the same transaction; on error nothing is persisted and the caller is
+// responsible for the retry bookkeeping.
+func (c *JobController) ProcessMoveVLANJob(ctx context.Context, job *database.Job) error {
 	job.ClientMac = strings.ToLower(job.ClientMac)
 
 	// Let's see whether this host can actually be found
-	val, err := c.db.FindSessionsForMAC(job.ClientMac)
+	sessions, err := c.db.FindSessionsForMAC(ctx, job.ClientMac)
 	if err != nil {
-		return err
+		return fmt.Errorf("looking up sessions: %w", err)
 	}
-	noRunningSession := len(val) == 0
+	var session *database.RadiusSession
+	if len(sessions) > 0 {
+		session = sessions[0]
+	}
 
-	tx, err := c.db.BeginTx()
-	if err != nil {
-		return err
-	}
-	var success = false
-	defer func() {
-		if !success {
-			database.Rollback(tx)
-			job.Retries = job.Retries + 1
-			err := c.db.SetJobErrorCount(job)
-			if err != nil {
-				log.WithError(err).Warn("Couldn't update job error counter!")
+	var (
+		oldVlan  int
+		useless  bool
+		hostname string
+		oldIP    net.IP
+	)
+	// The CoA is deliberately sent while the transaction is open: if anything after it fails, the radreply update is
+	// rolled back and the whole job (including the CoA) is retried. Moving the CoA after the commit changes these
+	// retry semantics and is left for a separate change.
+	err = c.db.WithTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		oldVlan, err = c.db.CheckUserSignedIn(ctx, tx, job.ClientMac)
+		switch {
+		case errors.Is(err, database.ErrNotFound):
+			// No entry found - this user is completely new
+			oldVlan = -1
+			if err := c.db.AddNewUser(ctx, tx, job.ClientMac, job.TargetVLAN); err != nil {
+				return fmt.Errorf("adding new user: %w", err)
 			}
-		} else {
-			err = c.db.DeleteJob(tx, job.Id)
-			if err != nil {
-				log.WithError(err).Warn("Couldn't delete job!")
+		case err != nil:
+			return err
+		default:
+			// We found an entry -> update it
+			if err := c.db.UpdateUser(ctx, tx, job.ClientMac, job.TargetVLAN); err != nil {
+				return fmt.Errorf("updating user: %w", err)
 			}
-			err = tx.Commit()
-			if err != nil {
-				log.WithError(err).Warn("Couldn't commit job!")
-			}
-			opsProcessedSuccessfully.Add(1)
 		}
-	}()
 
-	oldVlan, err := c.db.CheckUserSignedIn(tx, job.ClientMac)
-	if err != nil {
-		return err
-	}
+		// I'm not sure if you want this, so let's log that case
+		if oldVlan == job.TargetVLAN {
+			log.WithFields(log.Fields{
+				"job.Id":         job.Id,
+				"job.ClientMac":  job.ClientMac,
+				"job.TargetVLAN": job.TargetVLAN,
+			}).Warn("Got request to move to same vlan, silently discarding this ;-)")
+			useless = true
+			return c.db.DeleteJob(ctx, tx, job.Id)
+		}
 
-	if oldVlan == -1 {
-		// No entry found - this user is completely new
-		err = c.db.AddNewUser(tx, job.ClientMac, job.TargetVLAN)
+		// If there is a running session, force the switch to reauth
+		if session != nil {
+			request := radius.CoARequest{
+				SessionUID:       session.Uid,
+				SessionStartDate: session.StartDate.Time,
+				SwitchIP:         session.SwitchIP,
+				SwitchSecret:     []byte(c.switchSecret),
+			}
+			if err := request.SendDisconnect(ctx); err != nil {
+				opsFailedCoA.Inc()
+				return fmt.Errorf("sending CoA: %w", err)
+			}
+		}
+
+		// Clear the old lease since we've kicked out the user
+		hostname, oldIP, err = c.db.ClearLeasesForMAC(ctx, tx, job.ClientMac)
 		if err != nil {
+			return fmt.Errorf("clearing leases: %w", err)
+		}
+
+		switchIP := net.IP{}
+		switchPort := ""
+		if session != nil {
+			switchIP = session.SwitchIP
+			switchPort = session.SwitchPort
+		}
+
+		// Also log success to database
+		if err := c.db.LogJobResult(ctx, tx, job.ClientMac, oldVlan, job.TargetVLAN, switchIP, switchPort, hostname, oldIP); err != nil {
 			return err
 		}
-	} else {
-		// We found an entry -> update it
-		err = c.db.UpdateUser(tx, job.ClientMac, job.TargetVLAN)
-		if err != nil {
-			return err
-		}
+
+		return c.db.DeleteJob(ctx, tx, job.Id)
+	})
+	if err != nil {
+		return err
 	}
 
-	// I'm not sure if you want this, so let's log that case
-	if oldVlan == job.TargetVLAN {
-		log.WithFields(log.Fields{
-			"job.Id":         job.Id,
-			"job.ClientMac":  job.ClientMac,
-			"job.TargetVLAN": job.TargetVLAN,
-		}).Warn("Got request to move to same vlan, silently discarding this ;-)")
-		err = tx.Commit()
-		if err != nil {
-			log.WithError(err).Warn("Error during transaction commit")
-		}
-		opsProcessedSuccessfully.Inc()
+	opsProcessedSuccessfully.Inc()
+	if useless {
 		opsProcessedUseless.Inc()
 		return nil
-	}
-
-	// If there is a running session, force the switch to reauth
-	if !noRunningSession {
-		request := radius.CoARequest{
-			SessionUID:       val[0].Uid,
-			SessionStartDate: val[0].StartDate.Time,
-			SwitchIP:         val[0].SwitchIP,
-			SwitchSecret:     []byte(c.switchSecret),
-		}
-		err = request.SendDisconnect()
-		if err != nil {
-			opsFailedCoA.Inc()
-			return err
-		}
-	}
-
-	// Clear the old lease since we've kicked out the user
-	hostname, oldIp, err := c.db.ClearLeasesForMAC(tx, job.ClientMac)
-	if oldIp == nil {
-		oldIp = &net.IP{}
 	}
 
 	log.WithFields(log.Fields{
@@ -140,60 +151,71 @@ func (c *JobController) ProcessMoveVLANJob(job *database.Job) error {
 		"job.ClientMac":  job.ClientMac,
 		"oldVLAN":        oldVlan,
 		"job.TargetVLAN": job.TargetVLAN,
-		"oldIP":          oldIp.String(),
+		"oldIP":          oldIP.String(),
 		"hostname":       hostname,
 		"retries":        job.Retries,
 	}).Info("VLAN move successful")
-
-	switchIP := net.IP{}
-	switchPort := ""
-
-	if !noRunningSession {
-		switchIP = val[0].SwitchIP
-		switchPort = val[0].SwitchPort
-	}
-
-	// Also log success to database
-	err = c.db.LogJobResult(tx, job.ClientMac, oldVlan, job.TargetVLAN, switchIP, switchPort, hostname, *oldIp)
-	if err != nil {
-		return err
-	}
-
-	success = true
-	// deferred handler will make sure to commit or rollback
 	return nil
 }
 
-// work processes the work queue once
-func (c *JobController) work() error {
-	entryList, err := c.db.FetchPendingJobs()
+// work processes the work queue once. Only a failure to fetch the queue is returned; failing jobs are logged, their
+// retry counter is bumped and the remaining jobs are still processed.
+func (c *JobController) work(ctx context.Context) error {
+	jobs, err := c.db.FetchPendingJobs(ctx)
+	if err != nil {
+		return fmt.Errorf("fetching pending jobs: %w", err)
+	}
 
-	for ptr := entryList.Front(); ptr != nil; ptr = ptr.Next() {
-		obj := (ptr.Value).(database.Job)
-		log.WithFields(log.Fields{
-			"id":         obj.Id,
-			"clientMAC":  obj.ClientMac,
-			"targetVLAN": obj.TargetVLAN,
-		}).Info("Processing")
-		opsProcessed.Add(1)
-		err = c.ProcessMoveVLANJob(&obj)
-		if err != nil {
+	for i := range jobs {
+		job := &jobs[i]
+		if err := ctx.Err(); err != nil {
 			return err
 		}
+		l := log.WithFields(log.Fields{
+			"id":         job.Id,
+			"clientMAC":  job.ClientMac,
+			"targetVLAN": job.TargetVLAN,
+		})
+		l.Info("Processing")
+		opsProcessed.Inc()
+
+		err := c.ProcessMoveVLANJob(ctx, job)
+		if err == nil {
+			continue
+		}
+		if ctx.Err() != nil {
+			// Aborted by shutdown: the transaction was rolled back and the job will be picked up again after
+			// restart, so don't count this as a failed attempt.
+			return ctx.Err()
+		}
+
+		job.Retries++
+		l.WithError(err).WithField("retries", job.Retries).Warn("Processing job failed")
+		if err := c.db.SetJobErrorCount(ctx, job); err != nil {
+			l.WithError(err).Warn("Couldn't update job error counter!")
+		}
 	}
 	return nil
 }
 
-// Spin permanently loops over the work queue
-func (c *JobController) Spin() {
+// Spin loops over the work queue until ctx is cancelled, then returns ctx.Err()
+func (c *JobController) Spin(ctx context.Context) error {
 	log.WithField("node", database.GetNodeID()).Info("Entering main poll loop")
 
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 	for {
-		//c.db = database.CopyHandler(c.db)
-		err := c.work()
-		if err != nil {
+		if err := c.work(ctx); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			log.WithError(err).Warn("poll loop iteration failed")
 		}
-		time.Sleep(5 * time.Second)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }

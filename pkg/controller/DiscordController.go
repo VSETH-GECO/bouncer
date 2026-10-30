@@ -2,7 +2,9 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/bwmarrin/discordgo"
@@ -46,29 +48,25 @@ func convertData(data int) string {
 	return fmt.Sprint(data)
 }
 
-func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnabled bool, longCard bool) (*UserCard, error) {
-	l := log.WithField("search", searchString)
+func (dc *DiscordController) GetDiscordUserCard(ctx context.Context, searchString string, buttonsEnabled bool, longCard bool) (*UserCard, error) {
 	card := &UserCard{
 		Content: "",
 	}
 
-	mac, err := dc.db.FindMAC(searchString)
-	if err != nil {
-		l.WithError(err).Warn("User MAC lookup failed!")
-		return nil, err
-	}
-
-	if mac == "" {
+	mac, err := dc.db.FindMAC(ctx, searchString)
+	if errors.Is(err, database.ErrNotFound) {
 		card.Content = "No user found with this search string"
 		return card, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("looking up user MAC: %w", err)
 	}
 
 	card.RealMAC = mac
 
-	user, err := dc.db.LoadUser(mac)
+	user, err := dc.db.LoadUser(ctx, mac)
 	if err != nil {
-		l.WithError(err).Warn("Load user failed!")
-		return nil, err
+		return nil, fmt.Errorf("loading user %s: %w", mac, err)
 	}
 	if user == nil {
 		card.Content = "No user found with this search string"
@@ -83,10 +81,11 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 		online = "❌"
 	}
 
-	vlan, err := dc.db.CheckUserSignedInNoTx(user.Mac)
-	if err != nil {
-		l.WithError(err).Warn("Check user signed in failed!")
-		return nil, err
+	vlan, err := dc.db.CheckUserSignedIn(ctx, dc.db.DB(), user.Mac)
+	if errors.Is(err, database.ErrNotFound) {
+		vlan = -1
+	} else if err != nil {
+		return nil, fmt.Errorf("checking whether user %s is signed in: %w", user.Mac, err)
 	}
 	if vlan > 0 && vlan != 499 {
 		loggedIn = "✅"
@@ -109,7 +108,11 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 			online = online + " since " + convertDate(user.Sessions[0].EndDate)
 		}
 
-		if switchObj, err := dc.db.SwitchByIP(user.Sessions[0].SwitchIP.String()); err == nil {
+		switchObj, err := dc.db.SwitchByIP(ctx, user.Sessions[0].SwitchIP.String())
+		if err != nil && !errors.Is(err, database.ErrNotFound) {
+			log.WithError(err).Warn("Switch lookup failed")
+		}
+		if err == nil {
 			extraFields = []*discordgo.MessageEmbedField{
 				{
 					Name:  "Switch name",
@@ -174,7 +177,7 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 	if longCard && len(user.Sessions) > 0 {
 		// We have RADIUS data, so lets put that in here
 		buf := bytes.Buffer{}
-		dc.renderLastSessions(&buf, user.Sessions)
+		dc.renderLastSessions(ctx, &buf, user.Sessions)
 		card.Content = "Sessions in descending order:\n```md\n" + buf.String() + "\n```"
 	} else if !longCard {
 		card.Content = "User found, showing you their card"
@@ -183,13 +186,13 @@ func (dc *DiscordController) GetDiscordUserCard(searchString string, buttonsEnab
 	}
 
 	if longCard {
-		dc.assembleActions(card, user, vlan, buttonsEnabled)
+		dc.assembleActions(ctx, card, user, vlan, buttonsEnabled)
 	}
 
 	return card, nil
 }
 
-func (dc *DiscordController) renderLastSessions(buf *bytes.Buffer, sessions []*database.RadiusSession) {
+func (dc *DiscordController) renderLastSessions(ctx context.Context, buf *bytes.Buffer, sessions []*database.RadiusSession) {
 	table := tablewriter.NewWriter(buf)
 	table.Header([]string{
 		"Start",
@@ -207,17 +210,13 @@ func (dc *DiscordController) renderLastSessions(buf *bytes.Buffer, sessions []*d
 		if count >= 3 {
 			break
 		}
-		var switchName string
-		mySwitch, err := dc.db.SwitchByIP(session.SwitchIP.String())
-		if err != nil {
+		switchName := "<unknown>"
+		mySwitch, err := dc.db.SwitchByIP(ctx, session.SwitchIP.String())
+		switch {
+		case err == nil:
+			switchName = mySwitch.Hostname + " (" + mySwitch.Location + ")"
+		case !errors.Is(err, database.ErrNotFound):
 			log.WithError(err).Warn("Switch lookup failed")
-			switchName = "<unknown>"
-		} else {
-			if mySwitch != nil {
-				switchName = mySwitch.Hostname + " (" + mySwitch.Location + ")"
-			} else {
-				switchName = "<unknown>"
-			}
 		}
 
 		row := []string{
@@ -235,9 +234,9 @@ func (dc *DiscordController) renderLastSessions(buf *bytes.Buffer, sessions []*d
 	table.Render()
 }
 
-func (dc *DiscordController) assembleActions(card *UserCard, user *database.User, vlan int, buttonsEnabled bool) {
+func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard, user *database.User, vlan int, buttonsEnabled bool) {
 	// Available VLANs
-	availableVLANs := dc.collectAvailableVLANs(user, buttonsEnabled)
+	availableVLANs := dc.collectAvailableVLANs(ctx, user, buttonsEnabled)
 	vlansMissing := availableVLANs == nil
 	if vlansMissing {
 		log.Debug("no vlan available")
@@ -301,19 +300,19 @@ func (dc *DiscordController) assembleActions(card *UserCard, user *database.User
 	}
 }
 
-func (dc *DiscordController) collectAvailableVLANs(user *database.User, buttonsEnabled bool) *discordgo.ActionsRow {
+func (dc *DiscordController) collectAvailableVLANs(ctx context.Context, user *database.User, buttonsEnabled bool) *discordgo.ActionsRow {
 	if len(user.Sessions) == 0 {
 		return nil
 	}
 
 	switchIP := user.Sessions[0].SwitchIP
-	switchRef, err := dc.db.SwitchByIP(switchIP.String())
-	if err != nil {
-		log.WithError(err).Warn("Switch lookup failed")
+	switchRef, err := dc.db.SwitchByIP(ctx, switchIP.String())
+	if errors.Is(err, database.ErrNotFound) {
+		log.WithField("ip", switchIP.String()).Warn("Unknown switch returned from RADIUS query!")
 		return nil
 	}
-	if switchRef == nil {
-		log.WithField("ip", switchIP.String()).Warn("Unknown switch returned from RADIUS query!")
+	if err != nil {
+		log.WithError(err).Warn("Switch lookup failed")
 		return nil
 	}
 
@@ -341,6 +340,6 @@ func (dc *DiscordController) collectAvailableVLANs(user *database.User, buttonsE
 	}
 }
 
-func (dc *DiscordController) ChangeUserVLAN(mac string, targetVLAN string) error {
-	return dc.db.CreateNewJob(mac, targetVLAN)
+func (dc *DiscordController) ChangeUserVLAN(ctx context.Context, mac string, targetVLAN string) error {
+	return dc.db.CreateNewJob(ctx, mac, targetVLAN)
 }

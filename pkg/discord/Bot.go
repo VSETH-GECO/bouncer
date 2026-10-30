@@ -1,6 +1,8 @@
 package discord
 
 import (
+	"context"
+	"fmt"
 	"slices"
 
 	"github.com/VSETH-GECO/bouncer/pkg/config"
@@ -14,6 +16,11 @@ import (
 type Discord struct {
 	db *database.Handler
 	dc *controller.DiscordController
+
+	// ctx is the base context for all interaction handlers. discordgo invokes handlers on its own goroutines without a
+	// context, so the run context given to Setup is kept here to cancel handler queries on shutdown.
+	ctx     context.Context
+	session *discordgo.Session
 
 	allowedUsers       []string
 	logChannel         string
@@ -30,6 +37,7 @@ type Discord struct {
 func NewDiscord(db *database.Handler) *Discord {
 	obj := &Discord{
 		db:                 db,
+		ctx:                context.Background(),
 		allowedUsers:       config.CurrentOptions.DiscordUsers,
 		logChannel:         config.CurrentOptions.DiscordLogChannel,
 		privateInfoChannel: config.CurrentOptions.DiscordPrivateInfoChannel,
@@ -43,44 +51,61 @@ func NewDiscord(db *database.Handler) *Discord {
 	return obj
 }
 
-// Setup registers all commands with discord
-func (d *Discord) Setup() {
-	if d.token != "" && d.guildId != "" && d.privateInfoChannel != "" && d.logChannel != "" {
-		log.Info("Discord config detected, starting bot!")
-		log.Info("Authorized users: ")
-		for _, user := range d.allowedUsers {
-			log.Info(user)
-		}
-
-		discord, err := discordgo.New("Bot " + d.token)
-		if err != nil {
-			log.WithError(err).Warning("Connection to discord failed")
-			return
-		}
-
-		err = discord.Open()
-		if err != nil {
-			log.WithError(err).Warning("Couldn't open discord session")
-		}
-
-		err = d.migrateCommands(discord)
-		if err != nil {
-			log.WithError(err).Fatal("Couldn't setup discord commands")
-		}
-
-		err = d.setupHandlers(discord)
-		if err != nil {
-			log.WithError(err).Fatal("Couldn't setup discord handlers")
-		}
-
-		// Everything seems good
-		log.AddHook(&discordLogger{
-			s:          discord,
-			logChannel: d.logChannel,
-		})
-	} else {
+// Setup connects to discord and registers all commands. If the discord config is incomplete, the bot is not started
+// and Setup returns nil. Once Setup succeeded, call Close on shutdown.
+func (d *Discord) Setup(ctx context.Context) error {
+	if d.token == "" || d.guildId == "" || d.privateInfoChannel == "" || d.logChannel == "" {
 		log.Warning("Discord config missing or incomplete")
+		return nil
 	}
+
+	log.Info("Discord config detected, starting bot!")
+	log.Info("Authorized users: ")
+	for _, user := range d.allowedUsers {
+		log.Info(user)
+	}
+
+	d.ctx = ctx
+	session, err := discordgo.New("Bot " + d.token)
+	if err != nil {
+		return fmt.Errorf("creating discord session: %w", err)
+	}
+
+	err = session.Open()
+	if err != nil {
+		return fmt.Errorf("opening discord session: %w", err)
+	}
+
+	err = d.migrateCommands(ctx, session)
+	if err != nil {
+		_ = session.Close()
+		return fmt.Errorf("setting up discord commands: %w", err)
+	}
+
+	err = d.setupHandlers(session)
+	if err != nil {
+		_ = session.Close()
+		return fmt.Errorf("setting up discord handlers: %w", err)
+	}
+
+	d.session = session
+	// Everything seems good
+	log.AddHook(&discordLogger{
+		s:          session,
+		logChannel: d.logChannel,
+	})
+	return nil
+}
+
+// Close closes the discord session, if one was opened by Setup
+func (d *Discord) Close() error {
+	if d.session == nil {
+		return nil
+	}
+	if err := d.session.Close(); err != nil {
+		return fmt.Errorf("closing discord session: %w", err)
+	}
+	return nil
 }
 
 func (d *Discord) IsAuthorized(name string) bool {

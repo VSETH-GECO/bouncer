@@ -1,12 +1,16 @@
 package discord
 
 import (
+	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/VSETH-GECO/bouncer/pkg/controller"
 	"github.com/VSETH-GECO/bouncer/pkg/database"
 )
 
@@ -16,27 +20,30 @@ const (
 	CMD_PATCH_NAME = "patch"
 )
 
-func (d *Discord) migrateCommands(s *discordgo.Session) error {
-	version, err := d.db.GetDiscordVersion()
-	if err != nil {
+func (d *Discord) migrateCommands(ctx context.Context, s *discordgo.Session) error {
+	version, err := d.db.GetDiscordVersion(ctx)
+	if errors.Is(err, database.ErrNotFound) {
+		log.Warn("No previous discord migration entry found, assuming a fresh start")
+		version = 0
+	} else if err != nil {
 		return err
 	}
 
 	commands, err := s.ApplicationCommands(s.State.User.ID, d.guildId)
 	if err != nil {
-		return err
+		return fmt.Errorf("listing application commands: %w", err)
 	}
 
-	tx, err := d.db.BeginTx()
-	if err != nil {
-		return err
-	}
-	defer database.Rollback(tx)
+	return d.db.WithTx(ctx, func(tx *sql.Tx) error {
+		return d.migrateCommandsTx(ctx, tx, s, version, commands)
+	})
+}
 
+func (d *Discord) migrateCommandsTx(ctx context.Context, tx *sql.Tx, s *discordgo.Session, version int, commands []*discordgo.ApplicationCommand) error {
 	switch version {
 	case 0:
 		// Initial command registration
-		err = d.db.SetDiscordVersion(1, tx)
+		err := d.db.SetDiscordVersion(ctx, tx, 1)
 		if err != nil {
 			return err
 		}
@@ -65,12 +72,12 @@ func (d *Discord) migrateCommands(s *discordgo.Session) error {
 		}
 		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, d.guildId, command)
 		if err != nil {
-			return err
+			return fmt.Errorf("creating application command: %w", err)
 		}
 
 		d.commandIds[CMD_ROOT_NAME] = cmd.ID
 	case 1:
-		err = d.db.SetDiscordVersion(2, tx)
+		err := d.db.SetDiscordVersion(ctx, tx, 2)
 		if err != nil {
 			return err
 		}
@@ -78,7 +85,7 @@ func (d *Discord) migrateCommands(s *discordgo.Session) error {
 		if userCmd, ok := d.commandIds[CMD_ROOT_NAME]; ok {
 			err = s.ApplicationCommandDelete(s.State.User.ID, d.guildId, userCmd)
 			if err != nil {
-				return err
+				return fmt.Errorf("deleting application command: %w", err)
 			}
 		}
 
@@ -120,7 +127,7 @@ func (d *Discord) migrateCommands(s *discordgo.Session) error {
 		}
 		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, d.guildId, command)
 		if err != nil {
-			return err
+			return fmt.Errorf("creating application command: %w", err)
 		}
 
 		d.commandIds[CMD_ROOT_NAME] = cmd.ID
@@ -134,7 +141,36 @@ func (d *Discord) migrateCommands(s *discordgo.Session) error {
 		}
 	}
 
-	return tx.Commit()
+	return nil
+}
+
+// respond sends an interaction response and logs a failure to do so. what names the reply in the log message.
+func respond(s *discordgo.Session, i *discordgo.InteractionCreate, response *discordgo.InteractionResponse, what string) {
+	if err := s.InteractionRespond(i.Interaction, response); err != nil {
+		log.WithError(err).Warn("Error during discord reply: '" + what + "'")
+	}
+}
+
+// respondMessage replies to the interaction with a new plain text message
+func respondMessage(s *discordgo.Session, i *discordgo.InteractionCreate, content string, what string) {
+	respond(s, i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+		},
+	}, what)
+}
+
+// respondCard replies to the interaction with the given user card, using the given response type
+func respondCard(s *discordgo.Session, i *discordgo.InteractionCreate, responseType discordgo.InteractionResponseType, content string, card *controller.UserCard, what string) {
+	respond(s, i, &discordgo.InteractionResponse{
+		Type: responseType,
+		Data: &discordgo.InteractionResponseData{
+			Content:    content,
+			Components: card.Components,
+			Embeds:     card.Embeds,
+		},
+	}, what)
 }
 
 func (d *Discord) handleUserSubcommand(s *discordgo.Session, i *discordgo.InteractionCreate, isPatchCommand bool) {
@@ -152,16 +188,7 @@ func (d *Discord) handleUserSubcommand(s *discordgo.Session, i *discordgo.Intera
 	searchString := i.ApplicationCommandData().Options[0].Options[0].StringValue()
 
 	if len(searchString) < 3 {
-		err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "Invalid user query",
-			},
-		})
-
-		if err != nil {
-			log.WithError(err).Warn("Error during discord reply: 'invalid user query'")
-		}
+		respondMessage(s, i, "Invalid user query", "invalid user query")
 		return
 	}
 
@@ -176,34 +203,15 @@ func (d *Discord) handleUserSubcommand(s *discordgo.Session, i *discordgo.Intera
 		searchString = strings.ToLower(searchString)
 	}
 
-	userCard, err := d.dc.GetDiscordUserCard(searchString, true, isPatchCommand)
+	userCard, err := d.dc.GetDiscordUserCard(d.ctx, searchString, true, isPatchCommand)
 	if err != nil {
-		err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "User query failed - check logs for more details",
-			},
-		})
-
-		if err != nil {
-			log.WithError(err).Warn("Error during discord reply: 'user query failed'")
-		}
+		log.WithError(err).WithField("search", searchString).Warn("User query failed")
+		respondMessage(s, i, "User query failed - check logs for more details", "user query failed")
 		return
 	}
 	d.macCache[i.Interaction.ID] = userCard.RealMAC
 
-	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content:    userCard.Content,
-			Components: userCard.Components,
-			Embeds:     userCard.Embeds,
-		},
-	})
-
-	if err != nil {
-		log.WithError(err).Warn("Error during discord reply: 'final result'")
-	}
+	respondCard(s, i, discordgo.InteractionResponseChannelMessageWithSource, userCard.Content, userCard, "final result")
 }
 
 func (d *Discord) handlePatchSubcommand(s *discordgo.Session, i *discordgo.InteractionCreate, newOrExisting bool) {
@@ -219,109 +227,99 @@ func (d *Discord) handlePatchSubcommand(s *discordgo.Session, i *discordgo.Inter
 
 	if newOrExisting {
 		d.handleUserSubcommand(s, i, true)
-	} else {
-		// This is an interaction on an existing find request - lets see what we need to do...
-		data := i.Interaction.MessageComponentData()
-		if data.CustomID == "findVlanSelect" {
-			// The selection changed
-			d.vlanCache[i.Interaction.Message.ID] = data.Values[0]
+		return
+	}
 
-			err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseDeferredMessageUpdate,
-			})
-			if err != nil {
-				log.WithError(err).Warn("Error during discord reply: 'find vlan select'")
-			}
-		} else if data.CustomID == "findLogoutBtn" || data.CustomID == "findLoginBtn" || data.CustomID == "findChangeBtn" || data.CustomID == "findCancelBtn" {
-			var message string
-			if data.CustomID != "findCancelBtn" {
-				// All these buttons change the VLAN. Lets see...
-				var targetVLAN string
-				if data.CustomID == "findLogoutBtn" {
-					targetVLAN = "499"
-				} else {
-					var ok bool
-					if targetVLAN, ok = d.vlanCache[i.Interaction.Message.ID]; !ok {
-						// No vlan specified - fetch the default vlan
-						targetVLAN = "1"
-					}
-				}
+	// This is an interaction on an existing find request - lets see what we need to do...
+	data := i.Interaction.MessageComponentData()
+	switch data.CustomID {
+	case "findVlanSelect":
+		// The selection changed
+		d.vlanCache[i.Interaction.Message.ID] = data.Values[0]
+		respond(s, i, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseDeferredMessageUpdate,
+		}, "find vlan select")
+	case "findLogoutBtn", "findLoginBtn", "findChangeBtn", "findCancelBtn":
+		d.handleCardButton(s, i, data.CustomID)
+	default:
+		respondMessage(s, i, "Unknown interaction request - this could be a bug", "unknown interaction request")
+	}
+}
 
-				// We need to validate the VLAN choice
-				sessions, err := d.db.FindSessionsForMAC(d.macCache[i.Interaction.Message.Interaction.ID])
-				if err != nil {
-					log.WithError(err).Warn("Error during session lookup")
-					message = "***VLAN change failed!***"
-				}
-				if len(sessions) < 1 {
-					log.WithError(err).Warn("Couldn't find an open radius session for the mac specified")
-					message = "***VLAN change failed!***"
-				}
-				switchRef, err := d.db.SwitchByIP(sessions[0].SwitchIP.String())
-				if err != nil {
-					log.WithError(err).Warn("Error during switch lookup")
-					message = "***VLAN change failed!***"
-				}
-				if switchRef == nil {
-					log.WithError(err).Warn("Switch lookup failed")
-					message = "***VLAN change failed!***"
-				}
+// handleCardButton handles a button press on a user card: it queues the VLAN change (unless cancelled) and updates the
+// card so that its controls are disabled.
+func (d *Discord) handleCardButton(s *discordgo.Session, i *discordgo.InteractionCreate, customID string) {
+	// We need to get the id of the original message that triggered the original interaction
+	mac := d.macCache[i.Interaction.Message.Interaction.ID]
 
-				if targetVLAN == "1" {
-					targetVLAN = fmt.Sprint(switchRef.PrimaryVlan.VlanID)
-				} else {
-					ok := false
-					for _, vlan := range switchRef.Vlans {
-						if fmt.Sprint(vlan.VlanID) == targetVLAN {
-							ok = true
-						}
-					}
-					if !ok {
-						targetVLAN = fmt.Sprint(switchRef.PrimaryVlan.VlanID)
-					}
-				}
-
-				// We need to get the id of the original message that triggered the original interaction
-				err = d.dc.ChangeUserVLAN(d.macCache[i.Interaction.Message.Interaction.ID], targetVLAN)
-				message = "**VLAN change queued**"
-				if err != nil {
-					log.WithError(err).Warn("Error during vlan change request")
-					message = "***VLAN change failed!***"
-				}
-			} else {
-				message = ""
-			}
-
-			// Also, lets update the user card so that stuff is disabled...
-			card, err := d.dc.GetDiscordUserCard(d.macCache[i.Interaction.Message.Interaction.ID], false, false)
-
-			if err != nil {
-				log.WithError(err).Warn("Error during discord card update")
-			} else {
-				err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseUpdateMessage,
-					Data: &discordgo.InteractionResponseData{
-						Content:    "\n" + message + "\n\n" + card.Content,
-						Components: card.Components,
-						Embeds:     card.Embeds,
-					},
-				})
-				if err != nil {
-					log.WithError(err).Warn("Error during discord card update")
-				}
-			}
+	message := ""
+	if customID != "findCancelBtn" {
+		// All these buttons change the VLAN. Lets see...
+		var targetVLAN string
+		if customID == "findLogoutBtn" {
+			targetVLAN = "499"
 		} else {
-			err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Unknown interaction request - this could be a bug",
-				},
-			})
-			if err != nil {
-				log.WithError(err).Warn("Error during discord reply: 'unknown interaction request'")
+			var ok bool
+			if targetVLAN, ok = d.vlanCache[i.Interaction.Message.ID]; !ok {
+				// No vlan specified - fetch the default vlan
+				targetVLAN = "1"
+			}
+		}
+
+		message = "**VLAN change queued**"
+		if err := d.queueVLANChange(d.ctx, mac, targetVLAN); err != nil {
+			log.WithError(err).WithFields(log.Fields{
+				"mac":        mac,
+				"targetVLAN": targetVLAN,
+			}).Warn("VLAN change request failed")
+			message = "***VLAN change failed!***"
+		}
+	}
+
+	// Also, lets update the user card so that stuff is disabled...
+	card, err := d.dc.GetDiscordUserCard(d.ctx, mac, false, false)
+	if err != nil {
+		log.WithError(err).WithField("mac", mac).Warn("Error during discord card update")
+		respondMessage(s, i, "\n"+message+"\n\nUser card update failed - check logs for more details", "card update failed")
+		return
+	}
+	respondCard(s, i, discordgo.InteractionResponseUpdateMessage, "\n"+message+"\n\n"+card.Content, card, "card update")
+}
+
+// queueVLANChange validates the requested VLAN against the VLANs of the switch the client is connected to and queues
+// a job moving the client there. "1" or a VLAN unknown to the switch selects the switch's primary VLAN.
+func (d *Discord) queueVLANChange(ctx context.Context, mac string, targetVLAN string) error {
+	sessions, err := d.db.FindSessionsForMAC(ctx, mac)
+	if err != nil {
+		return fmt.Errorf("looking up sessions: %w", err)
+	}
+	if len(sessions) < 1 {
+		return errors.New("no radius session found for the mac specified")
+	}
+	switchRef, err := d.db.SwitchByIP(ctx, sessions[0].SwitchIP.String())
+	if err != nil {
+		return err
+	}
+
+	known := false
+	if targetVLAN != "1" {
+		for _, vlan := range switchRef.Vlans {
+			if fmt.Sprint(vlan.VlanID) == targetVLAN {
+				known = true
 			}
 		}
 	}
+	if !known {
+		if switchRef.PrimaryVlan == nil {
+			return fmt.Errorf("primary vlan of switch %s is not among its vlans", switchRef.Hostname)
+		}
+		targetVLAN = fmt.Sprint(switchRef.PrimaryVlan.VlanID)
+	}
+
+	if err := d.dc.ChangeUserVLAN(ctx, mac, targetVLAN); err != nil {
+		return fmt.Errorf("queueing vlan change to %s: %w", targetVLAN, err)
+	}
+	return nil
 }
 
 func (d *Discord) setupHandlers(s *discordgo.Session) error {

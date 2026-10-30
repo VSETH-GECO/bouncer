@@ -1,13 +1,13 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math/rand"
 	"os"
-	"os/signal"
 	"strconv"
-	"syscall"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -15,8 +15,8 @@ import (
 
 // LeaderElect provides a poor man's leader election based on our shared SQL database
 type LeaderElect struct {
-	connection *Handler
-	nodeID     string
+	handler *Handler
+	nodeID  string
 }
 
 func GetNodeID() string {
@@ -28,170 +28,149 @@ func GetNodeID() string {
 }
 
 // CreateLeaderElect prepares a new leader election object, using a combination of hostname and pid as unique id
-func CreateLeaderElect(connection *Handler) *LeaderElect {
+func CreateLeaderElect(handler *Handler) *LeaderElect {
 	obj := &LeaderElect{
-		connection: connection,
-		nodeID:     GetNodeID(),
+		handler: handler,
+		nodeID:  GetNodeID(),
 	}
 	return obj
 }
 
-func (l *LeaderElect) Prepare(lock int) {
+func (l *LeaderElect) Prepare(ctx context.Context, lock int) {
 	// Ensure that the lock exists (we simply ignore any errors inserting)
-	_, _ = l.connection.connection.Exec("INSERT INTO bouncer_election(id, time, nodeid) VALUES(?, '0000-00-00 00:00:00', NULL);", lock)
+	_, _ = l.handler.db.ExecContext(ctx, "INSERT INTO bouncer_election(id, time, nodeid) VALUES(?, '0000-00-00 00:00:00', NULL);", lock)
 }
 
-// TryAquire attempts to acquire the lock with the given id and returns whether it was successful
-func (l *LeaderElect) TryAcquire(lock int) (isLeader bool, leaderName string, err error) {
-	isLeader = false
-
-	// MariaDB does not have an equivalent to UPDATE ... RETURNING, so let's do that as transaction
-	tx, err := l.connection.connection.Begin()
-	defer tx.Rollback()
-	if err != nil {
-		return
-	}
-	_, err = tx.Exec("UPDATE bouncer_election SET nodeid=? WHERE id=? AND time < TIMESTAMPADD(SECOND, -30, CURRENT_TIMESTAMP());", l.nodeID, lock)
-	if err != nil {
-		return
-	}
-	result, err := tx.Query("SELECT nodeid FROM bouncer_election WHERE id=?", lock)
-	if err != nil {
-		return
-	}
-	defer result.Close()
+// TryAcquire attempts to acquire the lock with the given id and returns whether it was successful and who currently
+// holds the lock
+func (l *LeaderElect) TryAcquire(ctx context.Context, lock int) (bool, string, error) {
 	var actualNodeID string
-	if !result.Next() {
-		// No lock entry is in the table - lets add ourselves!
-		_, err = tx.Exec("INSERT INTO bouncer_election(nodeid, id, time) VALUES (?, ?, TIMESTAMPADD(SECOND, -30, CURRENT_TIMESTAMP()));", l.nodeID, lock)
+	// MariaDB does not have an equivalent to UPDATE ... RETURNING, so let's do that as transaction
+	err := l.handler.WithTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "UPDATE bouncer_election SET nodeid=? WHERE id=? AND time < TIMESTAMPADD(SECOND, -30, CURRENT_TIMESTAMP());", l.nodeID, lock)
 		if err != nil {
-			err = errors.New("couldn't create new lock entry")
-			return
+			return fmt.Errorf("updating lock entry: %w", err)
 		}
-		actualNodeID = l.nodeID
-	} else {
-		err = result.Scan(&actualNodeID)
+		// nodeid is NULL after a release, so scan into a NullString
+		var holder sql.NullString
+		err = tx.QueryRowContext(ctx, "SELECT nodeid FROM bouncer_election WHERE id=?", lock).Scan(&holder)
+		if errors.Is(err, sql.ErrNoRows) {
+			// No lock entry is in the table - lets add ourselves!
+			_, err = tx.ExecContext(ctx, "INSERT INTO bouncer_election(nodeid, id, time) VALUES (?, ?, TIMESTAMPADD(SECOND, -30, CURRENT_TIMESTAMP()));", l.nodeID, lock)
+			if err != nil {
+				return fmt.Errorf("creating new lock entry: %w", err)
+			}
+			actualNodeID = l.nodeID
+			return nil
+		}
 		if err != nil {
-			return
+			return fmt.Errorf("reading lock holder: %w", err)
 		}
-		result.Close()
-	}
-	err = tx.Commit()
+		actualNodeID = holder.String
+		return nil
+	})
 	if err != nil {
-		return
+		return false, "", err
 	}
-	isLeader = actualNodeID == l.nodeID
-	leaderName = actualNodeID
-	return
+	return actualNodeID == l.nodeID, actualNodeID, nil
 }
 
 // Refresh refreshes the given lock. If the current node doesn't hold it, this is a no-op
-func (l *LeaderElect) Refresh(lock int, connection *sql.DB) (err error) {
-	_, err = connection.Exec("UPDATE bouncer_election SET time=CURRENT_TIMESTAMP() WHERE id=? AND nodeid=?;", lock, l.nodeID)
-	return
+func (l *LeaderElect) Refresh(ctx context.Context, lock int) error {
+	_, err := l.handler.db.ExecContext(ctx, "UPDATE bouncer_election SET time=CURRENT_TIMESTAMP() WHERE id=? AND nodeid=?;", lock, l.nodeID)
+	if err != nil {
+		return fmt.Errorf("refreshing leader lock: %w", err)
+	}
+	return nil
 }
 
-func (l *LeaderElect) updateOrDie(lock int) {
-	myConnection := CopyHandler(l.connection)
-	defer func(connection *sql.DB) {
-		if connection == nil {
-			return
-		}
-		err := connection.Close()
-		if err != nil {
-			log.WithError(err).Info("Couldn't Close DB connection")
-		}
-	}(myConnection.connection)
+// holder returns the node currently holding the given lock
+func (l *LeaderElect) holder(ctx context.Context, lock int) (string, error) {
+	var holder sql.NullString
+	err := l.handler.db.QueryRowContext(ctx, "SELECT nodeid FROM bouncer_election WHERE id=?", lock).Scan(&holder)
+	if err != nil {
+		return "", fmt.Errorf("reading lock holder: %w", noRows(err))
+	}
+	return holder.String, nil
+}
 
+// KeepAlive periodically refreshes the given lock, which must be held by this node. It only returns on failure: when
+// the lock can't be refreshed or checked, when it was taken over by another node, or with ctx.Err() once ctx is
+// cancelled. The caller is expected to stop all work when it returns.
+func (l *LeaderElect) KeepAlive(ctx context.Context, lock int) error {
 	for {
-		err := l.Refresh(lock, myConnection.connection)
-		if err != nil {
-			log.WithError(err).Fatal("Error updating log time!")
+		if err := l.Refresh(ctx, lock); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
 		}
-		time.Sleep(time.Duration(15+rand.Intn(5)) * time.Second)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(15+rand.Intn(5)) * time.Second):
+		}
 
 		// Sanity check
-		result, err := myConnection.connection.Query("SELECT nodeid FROM bouncer_election WHERE id=?", lock)
-		if err != nil {
-			log.WithError(err).Fatal("Error checking my leader lock!")
-		}
-		if !result.Next() {
+		actualNodeID, err := l.holder(ctx, lock)
+		if errors.Is(err, ErrNotFound) {
 			log.Warn("Error checking my leader lock - empty result?")
-			result.Close()
 			continue
 		}
-		var actualNodeID string
-		err = result.Scan(&actualNodeID)
-		result.Close()
 		if err != nil {
-			log.WithError(err).Fatal("Error checking my leader lock!")
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("checking leader lock: %w", err)
 		}
 		if actualNodeID != l.nodeID {
-			log.WithFields(log.Fields{
-				"nodeID":       l.nodeID,
-				"actualNodeID": actualNodeID,
-			}).Fatal("Lost leader lock, aborting!")
+			return fmt.Errorf("lost leader lock %d: held by %q, I am %q", lock, actualNodeID, l.nodeID)
 		}
 	}
 }
 
-func (l *LeaderElect) releaseLockOnShutdown(lock int) {
-	myConnection := CopyHandler(l.connection)
-
-	handler := func() {
-		// All zeros is no longer a valid timestamp in MySQL 8
-		_, err := myConnection.connection.Exec("UPDATE bouncer_election SET time='2000-01-01 10:00:00', nodeid=NULL WHERE id=? AND nodeid=?;", lock, l.nodeID)
-		if err != nil {
-			log.WithError(err).Warn("Couldn't release lock on shutdown!")
-		} else {
-			log.Info("Leader lock released")
-		}
+// Release gives up the given lock so that another replica can take over without waiting for it to expire. It is a
+// no-op if this node does not hold the lock. Since this typically runs during shutdown, pass a fresh context rather
+// than the (already cancelled) run context.
+func (l *LeaderElect) Release(ctx context.Context, lock int) error {
+	// All zeros is no longer a valid timestamp in MySQL 8
+	_, err := l.handler.db.ExecContext(ctx, "UPDATE bouncer_election SET time='2000-01-01 10:00:00', nodeid=NULL WHERE id=? AND nodeid=?;", lock, l.nodeID)
+	if err != nil {
+		return fmt.Errorf("releasing leader lock: %w", err)
 	}
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		handler()
-		myConnection.connection.Close()
-		os.Exit(0)
-	}()
-
-	log.RegisterExitHandler(handler)
+	return nil
 }
 
-// EnsureLock blocks until the given lock is acquired successfully. If we ever loose it, it will terminate the process
-func (l *LeaderElect) EnsureLock(lock int) {
-	if l.connection.connection == nil {
-		l.connection.Connect()
-	}
-
-	l.Prepare(lock)
+// EnsureLock blocks until the given lock is acquired successfully. It returns ctx.Err() if ctx is cancelled first.
+// Once it returns nil, the caller must run KeepAlive to hold on to the lock and Release it on shutdown.
+func (l *LeaderElect) EnsureLock(ctx context.Context, lock int) error {
+	l.Prepare(ctx, lock)
 
 	for {
-		haveLock, leaderName, err := l.TryAcquire(lock)
+		haveLock, leaderName, err := l.TryAcquire(ctx, lock)
 		if haveLock {
 			// Yay, we got the lock!
-			go l.updateOrDie(lock)
-
-			// Since we hold it, let's explicitly release it on exit to save time
-			l.releaseLockOnShutdown(lock)
-			return
+			return nil
 		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		entry := log.WithFields(log.Fields{
+			"haveLock":   haveLock,
+			"id":         lock,
+			"leaderName": leaderName,
+		})
 		if err != nil {
-			log.WithError(err).WithFields(log.Fields{
-				"haveLock":   haveLock,
-				"id":         lock,
-				"leaderName": leaderName,
-			}).Warn("Didn't acquire lock")
+			entry.WithError(err).Warn("Didn't acquire lock")
 		} else {
-			log.WithFields(log.Fields{
-				"haveLock":   haveLock,
-				"id":         lock,
-				"leaderName": leaderName,
-			}).Debug("Didn't acquire lock")
+			entry.Debug("Didn't acquire lock")
 		}
-		time.Sleep(time.Duration(15+rand.Intn(15)) * time.Second)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(15+rand.Intn(15)) * time.Second):
+		}
 	}
 }

@@ -11,8 +11,8 @@ import (
 var MigrateCmd = &cobra.Command{
 	Use:     "migrate updates the database schema",
 	Aliases: []string{"migrate"},
-	Run: func(cmd *cobra.Command, args []string) {
-		migrate.RunCommand()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return migrate.RunCommand(cmd.Context())
 	},
 }
 
@@ -20,9 +20,11 @@ var MigrateCmd = &cobra.Command{
 var ServeCmd = &cobra.Command{
 	Use:     "run starts the bouncer daemon",
 	Aliases: []string{"run"},
-	Run: func(cmd *cobra.Command, args []string) {
-		migrate.RunCommand()
-		run.ExecCommand()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := migrate.RunCommand(cmd.Context()); err != nil {
+			return err
+		}
+		return run.ExecCommand(cmd.Context())
 	},
 }
 
@@ -30,6 +32,9 @@ var ServeCmd = &cobra.Command{
 var RootCmd = &cobra.Command{
 	Use:  "bouncer",
 	Long: "CoA RADIUS daemon",
+	// main logs the returned error exactly once
+	SilenceUsage:  true,
+	SilenceErrors: true,
 }
 
 // SetupCommands initializes all commands

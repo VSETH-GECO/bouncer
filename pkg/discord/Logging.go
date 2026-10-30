@@ -16,7 +16,6 @@ func (d *discordLogger) Levels() []log.Level {
 		log.InfoLevel,
 		log.WarnLevel,
 		log.ErrorLevel,
-		log.FatalLevel,
 		log.PanicLevel,
 	}
 }

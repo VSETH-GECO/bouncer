@@ -1,28 +1,25 @@
 package database
 
 import (
-	"database/sql"
-	log "github.com/sirupsen/logrus"
+	"context"
+	"fmt"
 )
 
-func (h *Handler) GetDiscordVersion() (int, error) {
-	rows, err := h.connection.Query("select version from bouncer_discord_migration order by version desc limit 1;")
-	defer Close(rows)
+// GetDiscordVersion returns the version of the last applied discord command migration. It returns an error wrapping
+// ErrNotFound if no migration has been applied yet.
+func (h *Handler) GetDiscordVersion(ctx context.Context) (int, error) {
+	var value int
+	err := h.db.QueryRowContext(ctx, "select version from bouncer_discord_migration order by version desc limit 1;").Scan(&value)
 	if err != nil {
-		return -1, err
+		return 0, fmt.Errorf("reading discord migration version: %w", noRows(err))
 	}
-
-	if !rows.Next() {
-		log.Warn("No previous discord migration entry found, assuming a fresh start")
-		return 0, nil
-	}
-
-	var value = 0
-	err = rows.Scan(&value)
-	return value, err
+	return value, nil
 }
 
-func (h *Handler) SetDiscordVersion(version int, tx *sql.Tx) error {
-	_, err := tx.Exec("insert into bouncer_discord_migration(version, updated_at) values(?, CURRENT_TIMESTAMP())", version)
-	return err
+func (h *Handler) SetDiscordVersion(ctx context.Context, q DBTX, version int) error {
+	_, err := q.ExecContext(ctx, "insert into bouncer_discord_migration(version, updated_at) values(?, CURRENT_TIMESTAMP())", version)
+	if err != nil {
+		return fmt.Errorf("storing discord migration version: %w", err)
+	}
+	return nil
 }

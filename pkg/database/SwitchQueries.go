@@ -1,6 +1,10 @@
 package database
 
-import "net"
+import (
+	"context"
+	"fmt"
+	"net"
+)
 
 type VLAN struct {
 	Id          string
@@ -16,53 +20,56 @@ type Switch struct {
 	Location    string
 	Ips         []*net.IP
 	Vlans       []*VLAN
-	PrimaryVlan *VLAN
+	PrimaryVlan *VLAN // nil if the primary VLAN is not among Vlans
 }
 
 // VLANs finds and loads all event VLANs for a switch
-func (h *Handler) VLANs(switchID string) ([]*VLAN, error) {
-	res, err := h.connection.Query("select ev.id, name, description, vlan_id, ip_range from bouncer_vlan as ev join bouncer_vlan_switch evs on ev.id = evs.event_vlan_id where evs.switch_id=?", switchID)
-	defer Close(res)
+func (h *Handler) VLANs(ctx context.Context, switchID string) ([]*VLAN, error) {
+	rows, err := h.db.QueryContext(ctx, "select ev.id, name, description, vlan_id, ip_range from bouncer_vlan as ev join bouncer_vlan_switch evs on ev.id = evs.event_vlan_id where evs.switch_id=?", switchID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying VLANs of switch %s: %w", switchID, err)
 	}
+	defer rows.Close()
 
 	var results []*VLAN
 
-	for res.Next() {
+	for rows.Next() {
 		obj := &VLAN{}
 		var ipRange string
-		err = res.Scan(&obj.Id, &obj.Name, &obj.Description, &obj.VlanID, &ipRange)
+		err = rows.Scan(&obj.Id, &obj.Name, &obj.Description, &obj.VlanID, &ipRange)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning VLAN of switch %s: %w", switchID, err)
 		}
 
 		_, obj.IpRange, err = net.ParseCIDR(ipRange)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("parsing IP range of VLAN %d: %w", obj.VlanID, err)
 		}
 
 		results = append(results, obj)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating VLANs of switch %s: %w", switchID, err)
 	}
 
 	return results, nil
 }
 
 // IPs finds all IPs of a switch
-func (h *Handler) IPs(switchID string) ([]*net.IP, error) {
-	res, err := h.connection.Query("select IP from bouncer_switch_ip where switch_id=?", switchID)
-	defer Close(res)
+func (h *Handler) IPs(ctx context.Context, switchID string) ([]*net.IP, error) {
+	rows, err := h.db.QueryContext(ctx, "select IP from bouncer_switch_ip where switch_id=?", switchID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying IPs of switch %s: %w", switchID, err)
 	}
+	defer rows.Close()
 
 	var results []*net.IP
 
-	for res.Next() {
+	for rows.Next() {
 		var ipStr string
-		err = res.Scan(&ipStr)
+		err = rows.Scan(&ipStr)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning IP of switch %s: %w", switchID, err)
 		}
 
 		ip := net.ParseIP(ipStr)
@@ -71,29 +78,25 @@ func (h *Handler) IPs(switchID string) ([]*net.IP, error) {
 			results = append(results, &ip)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating IPs of switch %s: %w", switchID, err)
+	}
 
 	return results, nil
 }
 
-func (h *Handler) SwitchByIP(ip string) (*Switch, error) {
-	res, err := h.connection.Query("select sw.id, primary_vlan, hostname, location from bouncer_switch_ip as swip join bouncer_switch_map as sw on sw.id = swip.switch_id where ip=?", ip)
-	defer Close(res)
-	if err != nil {
-		return nil, err
-	}
-
-	if !res.Next() {
-		return nil, nil
-	}
-
+// SwitchByIP loads the switch with the given management IP. It returns an error wrapping ErrNotFound if the IP
+// belongs to no known switch.
+func (h *Handler) SwitchByIP(ctx context.Context, ip string) (*Switch, error) {
 	switchObj := &Switch{}
 	var primaryVlan int
-	err = res.Scan(&switchObj.Id, &primaryVlan, &switchObj.Hostname, &switchObj.Location)
+	err := h.db.QueryRowContext(ctx, "select sw.id, primary_vlan, hostname, location from bouncer_switch_ip as swip join bouncer_switch_map as sw on sw.id = swip.switch_id where ip=?", ip).
+		Scan(&switchObj.Id, &primaryVlan, &switchObj.Hostname, &switchObj.Location)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("looking up switch %s: %w", ip, noRows(err))
 	}
 
-	switchObj.Vlans, err = h.VLANs(switchObj.Id)
+	switchObj.Vlans, err = h.VLANs(ctx, switchObj.Id)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +107,10 @@ func (h *Handler) SwitchByIP(ip string) (*Switch, error) {
 		}
 	}
 
-	switchObj.Ips, err = h.IPs(switchObj.Id)
+	switchObj.Ips, err = h.IPs(ctx, switchObj.Id)
+	if err != nil {
+		return nil, err
+	}
 
-	return switchObj, err
+	return switchObj, nil
 }
