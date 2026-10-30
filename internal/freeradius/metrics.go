@@ -38,7 +38,9 @@ func CountKnown(ctx context.Context, q db.Querier) (int, error) {
 
 // CountAuthorized returns the number of distinct authorized users.
 func CountAuthorized(ctx context.Context, q db.Querier) (int, error) {
-	n, err := count(ctx, q, mysql.SELECT(mysql.COUNT(mysql.DISTINCT(table.Radreply.Username)).AS("count")).FROM(table.Radreply))
+	n, err := count(ctx, q, mysql.SELECT(mysql.COUNT(mysql.DISTINCT(table.Radreply.Username)).AS("count")).
+		FROM(table.Radreply).
+		WHERE(table.Radreply.Attribute.EQ(mysql.String(AttrVLAN))))
 	if err != nil {
 		return 0, fmt.Errorf("counting authorized users: %w", err)
 	}
@@ -73,7 +75,7 @@ func vlanCounts(rows []vlanRow) ([]VLANCount, error) {
 	return out, nil
 }
 
-// AuthorizedPerVLAN returns the number of authorized users per VLAN.
+// AuthorizedPerVLAN returns the number of distinct authorized users per VLAN.
 func AuthorizedPerVLAN(ctx context.Context, q db.Querier) ([]VLANCount, error) {
 	var rows []vlanRow
 	err := mysql.SELECT(table.Radreply.Value.AS("vlan_row.value"), mysql.COUNT(mysql.DISTINCT(table.Radreply.Username)).AS("vlan_row.count")).
@@ -87,7 +89,7 @@ func AuthorizedPerVLAN(ctx context.Context, q db.Querier) ([]VLANCount, error) {
 	return vlanCounts(rows)
 }
 
-// ActivePerVLAN returns the number of users with an open session per VLAN.
+// ActivePerVLAN returns the number of distinct users with an open session per VLAN.
 func ActivePerVLAN(ctx context.Context, q db.Querier) ([]VLANCount, error) {
 	var rows []vlanRow
 	err := mysql.SELECT(table.Radreply.Value.AS("vlan_row.value"), mysql.COUNT(mysql.DISTINCT(table.Radacct.Username)).AS("vlan_row.count")).
@@ -101,7 +103,7 @@ func ActivePerVLAN(ctx context.Context, q db.Querier) ([]VLANCount, error) {
 	return vlanCounts(rows)
 }
 
-// ActivePerSwitch returns the number of users with an open session per switch.
+// ActivePerSwitch returns the number of distinct users with an open session per switch.
 func ActivePerSwitch(ctx context.Context, q db.Querier) ([]SwitchCount, error) {
 	var rows []struct {
 		SwitchIP string

@@ -56,6 +56,7 @@ func ByIP(ctx context.Context, q db.Querier, ip net.IP) (Switch, error) {
 			LEFT_JOIN(vs, vs.SwitchID.EQ(sm.ID)).
 			LEFT_JOIN(v, v.ID.EQ(vs.EventVlanID))).
 		WHERE(sm.ID.EQ(mysql.Int32(ref.SwitchID))).
+		ORDER_BY(si.ID.ASC(), v.VlanID.ASC()).
 		QueryContext(ctx, q, &dest)
 	if err != nil {
 		return Switch{}, fmt.Errorf("loading switch %d: %w", ref.SwitchID, db.NotFound(err))

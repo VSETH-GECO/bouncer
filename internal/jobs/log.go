@@ -21,7 +21,7 @@ type Result struct {
 }
 
 func ipString(ip net.IP) *string {
-	if ip == nil {
+	if len(ip) == 0 {
 		return nil
 	}
 	s := ip.String()

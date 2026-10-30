@@ -3,6 +3,7 @@ package kea
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 
@@ -38,7 +39,8 @@ func FindMAC(ctx context.Context, q db.Querier, value string) (mac.MAC, error) {
 	if err == nil {
 		return fromHwaddr(row4.Hwaddr, fmt.Sprintf("lease4 %s", ipv4FromUint32(row4.Address)))
 	}
-	if nf := db.NotFound(err); nf == err {
+	err = db.NotFound(err)
+	if !errors.Is(err, db.ErrNotFound) {
 		return mac.MAC{}, fmt.Errorf("searching lease4 for %q: %w", value, err)
 	}
 
@@ -53,7 +55,8 @@ func FindMAC(ctx context.Context, q db.Querier, value string) (mac.MAC, error) {
 		if err == nil {
 			return fromHwaddr(row6.Hwaddr, fmt.Sprintf("lease6 %s", net.IP(row6.Address)))
 		}
-		if nf := db.NotFound(err); nf == err {
+		err = db.NotFound(err)
+		if !errors.Is(err, db.ErrNotFound) {
 			return mac.MAC{}, fmt.Errorf("searching lease6 for %q: %w", value, err)
 		}
 	}

@@ -27,7 +27,7 @@ _physically_ toggle, therefore the client will also fetch a new DHCP lease if ne
 
 ## Build
 
-This requires golang >= 1.11 and optionally a debian machine/container, in case you
+This requires Go 1.25 and optionally a debian machine/container, in case you
 want to build the package.
 
 For the debian package:
