@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/VSETH-GECO/bouncer/internal/db"
+	"github.com/VSETH-GECO/bouncer/internal/election"
+	"github.com/VSETH-GECO/bouncer/internal/metrics"
 	"github.com/VSETH-GECO/bouncer/pkg/config"
 	"github.com/VSETH-GECO/bouncer/pkg/controller"
-	"github.com/VSETH-GECO/bouncer/pkg/database"
 	"github.com/VSETH-GECO/bouncer/pkg/discord"
-	"github.com/VSETH-GECO/bouncer/pkg/prometheus"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -41,17 +42,23 @@ const leaderLockID = 1
 // ExecCommand executes the main loop until ctx is cancelled or a component fails. Once ctx is cancelled it returns an
 // error wrapping context.Canceled; main treats that as a clean shutdown.
 func ExecCommand(ctx context.Context) error {
-	dbHandler, err := database.OpenFromConfig(ctx)
+	d, err := db.Open(ctx, db.Config{
+		Host:     config.CurrentOptions.DBHost,
+		Port:     config.CurrentOptions.DBPort,
+		User:     config.CurrentOptions.DBUser,
+		Password: config.CurrentOptions.DBPassword,
+		Database: config.CurrentOptions.DBDatabase,
+	})
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if err := dbHandler.Close(); err != nil {
+		if err := d.Close(); err != nil {
 			log.WithError(err).Warn("Couldn't close database connection")
 		}
 	}()
 
-	if err := dbHandler.CheckDBVersion(ctx); err != nil {
+	if err := d.CheckVersion(ctx); err != nil {
 		return fmt.Errorf("checking database version: %w", err)
 	}
 
@@ -63,15 +70,15 @@ func ExecCommand(ctx context.Context) error {
 
 	if viper.GetBool("leader-elect") {
 		log.Info("Attempting to acquire leader lock")
-		election := database.CreateLeaderElect(dbHandler)
-		if err := election.EnsureLock(ctx, leaderLockID); err != nil {
+		lock := election.New(d)
+		if err := lock.EnsureLock(ctx, leaderLockID); err != nil {
 			return fmt.Errorf("acquiring leader lock: %w", err)
 		}
 		// Since we hold it, let's explicitly release it on exit to save time. ctx is already cancelled at this point.
 		defer func() {
 			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := election.Release(releaseCtx, leaderLockID); err != nil {
+			if err := lock.Release(releaseCtx, leaderLockID); err != nil {
 				log.WithError(err).Warn("Couldn't release lock on shutdown!")
 			} else {
 				log.Info("Leader lock released")
@@ -79,7 +86,7 @@ func ExecCommand(ctx context.Context) error {
 		}()
 		// Losing the lock stops the whole daemon, so that another replica can take over
 		group.Go(func() error {
-			return election.KeepAlive(groupCtx, leaderLockID)
+			return lock.KeepAlive(groupCtx, leaderLockID)
 		})
 	}
 
@@ -92,11 +99,11 @@ func ExecCommand(ctx context.Context) error {
 
 	if viper.GetBool("usePrometheus") {
 		group.Go(func() error {
-			return prometheus.StartServing(groupCtx, viper.GetInt("prometheusPort"), dbHandler)
+			return metrics.Serve(groupCtx, viper.GetInt("prometheusPort"), d.Querier())
 		})
 	}
 
-	bot := discord.NewDiscord(dbHandler)
+	bot := discord.NewDiscord(d)
 	if err := bot.Setup(groupCtx); err != nil {
 		return fmt.Errorf("starting discord bot: %w", err)
 	}
@@ -106,7 +113,7 @@ func ExecCommand(ctx context.Context) error {
 		}
 	}()
 
-	jobController := controller.NewClientController(dbHandler, config.CurrentOptions.SwitchCOASecret)
+	jobController := controller.NewClientController(d, config.CurrentOptions.SwitchCOASecret)
 	group.Go(func() error {
 		return jobController.Spin(groupCtx)
 	})

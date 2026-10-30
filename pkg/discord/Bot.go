@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/pkg/config"
 	"github.com/VSETH-GECO/bouncer/pkg/controller"
-	"github.com/VSETH-GECO/bouncer/pkg/database"
 	"github.com/bwmarrin/discordgo"
 	log "github.com/sirupsen/logrus"
 )
 
 // Discord provides a discord bot interface to this app
 type Discord struct {
-	db *database.Handler
+	db *db.DB
 	dc *controller.DiscordController
 
 	// ctx is the base context for all interaction handlers. discordgo invokes handlers on its own goroutines without a
@@ -34,9 +34,9 @@ type Discord struct {
 }
 
 // NewDiscord returns a new discord handler
-func NewDiscord(db *database.Handler) *Discord {
+func NewDiscord(d *db.DB) *Discord {
 	obj := &Discord{
-		db:                 db,
+		db:                 d,
 		ctx:                context.Background(),
 		allowedUsers:       config.CurrentOptions.DiscordUsers,
 		logChannel:         config.CurrentOptions.DiscordLogChannel,
@@ -46,7 +46,7 @@ func NewDiscord(db *database.Handler) *Discord {
 		commandIds:         map[string]string{},
 		vlanCache:          map[string]string{},
 		macCache:           map[string]string{},
-		dc:                 controller.NewDiscordController(db),
+		dc:                 controller.NewDiscordController(d),
 	}
 	return obj
 }

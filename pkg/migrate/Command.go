@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/VSETH-GECO/bouncer/pkg/database"
+	"github.com/VSETH-GECO/bouncer/internal/db"
+	"github.com/VSETH-GECO/bouncer/pkg/config"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 )
@@ -19,17 +20,23 @@ func RegisterArguments(flags *pflag.FlagSet) {
 
 // RunCommand applies all pending database migrations
 func RunCommand(ctx context.Context) error {
-	dbHandler, err := database.OpenFromConfig(ctx)
+	d, err := db.Open(ctx, db.Config{
+		Host:     config.CurrentOptions.DBHost,
+		Port:     config.CurrentOptions.DBPort,
+		User:     config.CurrentOptions.DBUser,
+		Password: config.CurrentOptions.DBPassword,
+		Database: config.CurrentOptions.DBDatabase,
+	})
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if err := dbHandler.Close(); err != nil {
+		if err := d.Close(); err != nil {
 			log.WithError(err).Warn("Couldn't close database connection")
 		}
 	}()
 
-	if err := dbHandler.Migrate(ctx, force); err != nil {
+	if err := d.Migrate(ctx, force); err != nil {
 		return fmt.Errorf("migrating database: %w", err)
 	}
 	return nil

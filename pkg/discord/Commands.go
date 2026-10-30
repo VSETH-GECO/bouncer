@@ -2,16 +2,19 @@ package discord
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/VSETH-GECO/bouncer/internal/db"
+	"github.com/VSETH-GECO/bouncer/internal/freeradius"
+	"github.com/VSETH-GECO/bouncer/internal/mac"
+	"github.com/VSETH-GECO/bouncer/internal/switches"
 	"github.com/VSETH-GECO/bouncer/pkg/controller"
-	"github.com/VSETH-GECO/bouncer/pkg/database"
 )
 
 const (
@@ -21,8 +24,8 @@ const (
 )
 
 func (d *Discord) migrateCommands(ctx context.Context, s *discordgo.Session) error {
-	version, err := d.db.GetDiscordVersion(ctx)
-	if errors.Is(err, database.ErrNotFound) {
+	version, err := commandVersion(ctx, d.db.Querier())
+	if errors.Is(err, db.ErrNotFound) {
 		log.Warn("No previous discord migration entry found, assuming a fresh start")
 		version = 0
 	} else if err != nil {
@@ -34,16 +37,16 @@ func (d *Discord) migrateCommands(ctx context.Context, s *discordgo.Session) err
 		return fmt.Errorf("listing application commands: %w", err)
 	}
 
-	return d.db.WithTx(ctx, func(tx *sql.Tx) error {
+	return d.db.WithTx(ctx, func(tx db.Querier) error {
 		return d.migrateCommandsTx(ctx, tx, s, version, commands)
 	})
 }
 
-func (d *Discord) migrateCommandsTx(ctx context.Context, tx *sql.Tx, s *discordgo.Session, version int, commands []*discordgo.ApplicationCommand) error {
+func (d *Discord) migrateCommandsTx(ctx context.Context, tx db.Querier, s *discordgo.Session, version int, commands []*discordgo.ApplicationCommand) error {
 	switch version {
 	case 0:
 		// Initial command registration
-		err := d.db.SetDiscordVersion(ctx, tx, 1)
+		err := setCommandVersion(ctx, tx, 1)
 		if err != nil {
 			return err
 		}
@@ -77,7 +80,7 @@ func (d *Discord) migrateCommandsTx(ctx context.Context, tx *sql.Tx, s *discordg
 
 		d.commandIds[CMD_ROOT_NAME] = cmd.ID
 	case 1:
-		err := d.db.SetDiscordVersion(ctx, tx, 2)
+		err := setCommandVersion(ctx, tx, 2)
 		if err != nil {
 			return err
 		}
@@ -250,7 +253,7 @@ func (d *Discord) handlePatchSubcommand(s *discordgo.Session, i *discordgo.Inter
 // card so that its controls are disabled.
 func (d *Discord) handleCardButton(s *discordgo.Session, i *discordgo.InteractionCreate, customID string) {
 	// We need to get the id of the original message that triggered the original interaction
-	mac := d.macCache[i.Interaction.Message.Interaction.ID]
+	cachedMAC := d.macCache[i.Interaction.Message.Interaction.ID]
 
 	message := ""
 	if customID != "findCancelBtn" {
@@ -267,9 +270,9 @@ func (d *Discord) handleCardButton(s *discordgo.Session, i *discordgo.Interactio
 		}
 
 		message = "**VLAN change queued**"
-		if err := d.queueVLANChange(d.ctx, mac, targetVLAN); err != nil {
+		if err := d.queueVLANChange(d.ctx, cachedMAC, targetVLAN); err != nil {
 			log.WithError(err).WithFields(log.Fields{
-				"mac":        mac,
+				"mac":        cachedMAC,
 				"targetVLAN": targetVLAN,
 			}).Warn("VLAN change request failed")
 			message = "***VLAN change failed!***"
@@ -277,9 +280,9 @@ func (d *Discord) handleCardButton(s *discordgo.Session, i *discordgo.Interactio
 	}
 
 	// Also, lets update the user card so that stuff is disabled...
-	card, err := d.dc.GetDiscordUserCard(d.ctx, mac, false, false)
+	card, err := d.dc.GetDiscordUserCard(d.ctx, cachedMAC, false, false)
 	if err != nil {
-		log.WithError(err).WithField("mac", mac).Warn("Error during discord card update")
+		log.WithError(err).WithField("mac", cachedMAC).Warn("Error during discord card update")
 		respondMessage(s, i, "\n"+message+"\n\nUser card update failed - check logs for more details", "card update failed")
 		return
 	}
@@ -288,36 +291,48 @@ func (d *Discord) handleCardButton(s *discordgo.Session, i *discordgo.Interactio
 
 // queueVLANChange validates the requested VLAN against the VLANs of the switch the client is connected to and queues
 // a job moving the client there. "1" or a VLAN unknown to the switch selects the switch's primary VLAN.
-func (d *Discord) queueVLANChange(ctx context.Context, mac string, targetVLAN string) error {
-	sessions, err := d.db.FindSessionsForMAC(ctx, mac)
+func (d *Discord) queueVLANChange(ctx context.Context, macString string, targetVLAN string) error {
+	m, err := mac.Parse(macString)
+	if err != nil {
+		return fmt.Errorf("parsing mac %q: %w", macString, err)
+	}
+	sessions, err := freeradius.SessionsForMAC(ctx, d.db.Querier(), m)
 	if err != nil {
 		return fmt.Errorf("looking up sessions: %w", err)
 	}
 	if len(sessions) < 1 {
 		return errors.New("no radius session found for the mac specified")
 	}
-	switchRef, err := d.db.SwitchByIP(ctx, sessions[0].SwitchIP.String())
+	if sessions[0].SwitchIP == nil {
+		return fmt.Errorf("session has no switch IP: %w", db.ErrNotFound)
+	}
+	switchRef, err := switches.ByIP(ctx, d.db.Querier(), sessions[0].SwitchIP)
 	if err != nil {
 		return err
 	}
 
+	vlan, err := strconv.Atoi(targetVLAN)
+	if err != nil {
+		return fmt.Errorf("parsing target vlan %q: %w", targetVLAN, err)
+	}
+
 	known := false
-	if targetVLAN != "1" {
-		for _, vlan := range switchRef.Vlans {
-			if fmt.Sprint(vlan.VlanID) == targetVLAN {
+	if vlan != 1 {
+		for _, v := range switchRef.VLANs {
+			if v.VLANID == vlan {
 				known = true
 			}
 		}
 	}
 	if !known {
-		if switchRef.PrimaryVlan == nil {
+		if switchRef.PrimaryVLAN == nil {
 			return fmt.Errorf("primary vlan of switch %s is not among its vlans", switchRef.Hostname)
 		}
-		targetVLAN = fmt.Sprint(switchRef.PrimaryVlan.VlanID)
+		vlan = switchRef.PrimaryVLAN.VLANID
 	}
 
-	if err := d.dc.ChangeUserVLAN(ctx, mac, targetVLAN); err != nil {
-		return fmt.Errorf("queueing vlan change to %s: %w", targetVLAN, err)
+	if err := d.dc.ChangeUserVLAN(ctx, m, vlan); err != nil {
+		return fmt.Errorf("queueing vlan change to %d: %w", vlan, err)
 	}
 	return nil
 }
