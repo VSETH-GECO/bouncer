@@ -55,8 +55,18 @@ func Pending(ctx context.Context, q db.Querier) ([]Job, error) {
 	return list, nil
 }
 
-// Create queues a job moving the client to the given VLAN.
+// minVLAN and maxVLAN bound the VLAN IDs usable on a port: 802.1Q reserves 0 and 4095.
+const (
+	minVLAN = 1
+	maxVLAN = 4094
+)
+
+// Create queues a job moving the client to the given VLAN. It returns an error without touching the database
+// when vlan is outside 1..4094.
 func Create(ctx context.Context, q db.Querier, m mac.MAC, vlan int) error {
+	if vlan < minVLAN || vlan > maxVLAN {
+		return fmt.Errorf("creating job for %s: vlan %d outside %d..%d", m.Hex(), vlan, minVLAN, maxVLAN)
+	}
 	_, err := table.BouncerJobs.INSERT(table.BouncerJobs.ClientMAC, table.BouncerJobs.TargetVLAN).
 		VALUES(m.Hex(), int16(vlan)).
 		ExecContext(ctx, q)

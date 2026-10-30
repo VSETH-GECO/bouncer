@@ -184,3 +184,41 @@ func TestLogResult_Values(t *testing.T) {
 		t.Errorf("got %s %s %s %s", str(row.SwitchIP), str(row.SwitchPort), str(row.ClientName), str(row.ClientIP))
 	}
 }
+
+func TestCreate_RejectsOutOfRangeVLAN(t *testing.T) {
+	ctx, q := begin(t)
+	m := mac.MustParse("00:11:22:33:44:56")
+
+	// pending returns the VLANs of the queued jobs for m.
+	pending := func() []int {
+		list, err := jobs.Pending(ctx, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var vlans []int
+		for _, j := range list {
+			if j.RawMAC == m.Hex() {
+				vlans = append(vlans, j.TargetVLAN)
+			}
+		}
+		return vlans
+	}
+
+	for _, vlan := range []int{0, -1, 4095, 70000} {
+		if err := jobs.Create(ctx, q, m, vlan); err == nil {
+			t.Errorf("Create(vlan %d) succeeded, want an error", vlan)
+		}
+	}
+	if got := pending(); len(got) != 0 {
+		t.Errorf("rejected VLANs left jobs with VLANs %v, want none", got)
+	}
+
+	for _, vlan := range []int{1, 4094} {
+		if err := jobs.Create(ctx, q, m, vlan); err != nil {
+			t.Fatalf("Create(vlan %d): %v", vlan, err)
+		}
+	}
+	if got := pending(); len(got) != 2 || got[0] != 1 || got[1] != 4094 {
+		t.Errorf("pending VLANs = %v, want [1 4094]", got)
+	}
+}
