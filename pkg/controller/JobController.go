@@ -169,15 +169,20 @@ func (c *JobController) ProcessMoveVLANJob(ctx context.Context, job *jobs.Job) e
 		return nil
 	}
 
-	log.WithFields(log.Fields{
+	fields := log.Fields{
 		"job.Id":         job.ID,
 		"job.ClientMac":  job.MAC.Hex(),
 		"oldVLAN":        oldVlan,
 		"job.TargetVLAN": job.TargetVLAN,
-		"oldIP":          oldIP.String(),
-		"hostname":       derefOr(hostname, "<nil>"),
 		"retries":        job.Retries,
-	}).Info("VLAN move successful")
+	}
+	if hostname != nil {
+		fields["hostname"] = *hostname
+	}
+	if oldIP != nil {
+		fields["oldIP"] = oldIP.String()
+	}
+	log.WithFields(fields).Info("VLAN move successful")
 	return nil
 }
 

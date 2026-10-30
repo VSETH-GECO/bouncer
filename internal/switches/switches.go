@@ -32,8 +32,11 @@ type Switch struct {
 }
 
 // ByIP loads the switch that has ip as one of its management IPs. It returns an error wrapping db.ErrNotFound if ip
-// belongs to no known switch.
+// belongs to no known switch. A nil ip is treated as an unknown switch.
 func ByIP(ctx context.Context, q db.Querier, ip net.IP) (Switch, error) {
+	if ip == nil {
+		return Switch{}, fmt.Errorf("no switch IP: %w", db.ErrNotFound)
+	}
 	var ref model.BouncerSwitchIP
 	err := mysql.SELECT(table.BouncerSwitchIP.SwitchID).
 		FROM(table.BouncerSwitchIP).

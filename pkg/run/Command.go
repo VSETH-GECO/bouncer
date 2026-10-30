@@ -42,13 +42,7 @@ const leaderLockID = 1
 // ExecCommand executes the main loop until ctx is cancelled or a component fails. Once ctx is cancelled it returns an
 // error wrapping context.Canceled; main treats that as a clean shutdown.
 func ExecCommand(ctx context.Context) error {
-	d, err := db.Open(ctx, db.Config{
-		Host:     config.CurrentOptions.DBHost,
-		Port:     config.CurrentOptions.DBPort,
-		User:     config.CurrentOptions.DBUser,
-		Password: config.CurrentOptions.DBPassword,
-		Database: config.CurrentOptions.DBDatabase,
-	})
+	d, err := db.Open(ctx, config.CurrentOptions.DB())
 	if err != nil {
 		return err
 	}

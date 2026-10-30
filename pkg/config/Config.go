@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/VSETH-GECO/bouncer/internal/db"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -21,6 +22,11 @@ type GlobalOptions struct {
 	DiscordPrivateInfoChannel string
 	DiscordGuildID            string
 	SwitchCOASecret           string
+}
+
+// DB returns the database connection settings from o.
+func (o GlobalOptions) DB() db.Config {
+	return db.Config{Host: o.DBHost, Port: o.DBPort, User: o.DBUser, Password: o.DBPassword, Database: o.DBDatabase}
 }
 
 var (

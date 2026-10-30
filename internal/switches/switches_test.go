@@ -133,6 +133,14 @@ func TestByIP_Unknown(t *testing.T) {
 	}
 }
 
+func TestByIP_NilIP(t *testing.T) {
+	ctx, q := begin(t)
+	_, err := switches.ByIP(ctx, q, nil)
+	if !errors.Is(err, db.ErrNotFound) {
+		t.Errorf("ByIP(nil) err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestByIP_BadIPRangeIsError(t *testing.T) {
 	ctx, q := begin(t)
 	seedSwitch(t, q, 131, 131, "sw-test-4", nil, "10.10.0.31")

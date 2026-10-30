@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -50,14 +49,6 @@ func convertData(data *int64) string {
 	return fmt.Sprint(*data)
 }
 
-// switchByIP looks up the switch with the given IP. A nil IP is an unknown switch: the error wraps db.ErrNotFound.
-func (dc *DiscordController) switchByIP(ctx context.Context, ip net.IP) (switches.Switch, error) {
-	if ip == nil {
-		return switches.Switch{}, fmt.Errorf("session has no switch IP: %w", db.ErrNotFound)
-	}
-	return switches.ByIP(ctx, dc.db.Querier(), ip)
-}
-
 func (dc *DiscordController) GetDiscordUserCard(ctx context.Context, searchString string, buttonsEnabled bool, longCard bool) (*UserCard, error) {
 	card := &UserCard{
 		Content: "",
@@ -78,10 +69,6 @@ func (dc *DiscordController) GetDiscordUserCard(ctx context.Context, searchStrin
 	user, err := loadUser(ctx, q, m)
 	if err != nil {
 		return nil, fmt.Errorf("loading user %s: %w", m, err)
-	}
-	if user == nil {
-		card.Content = "No user found with this search string"
-		return card, nil
 	}
 
 	var online string
@@ -115,7 +102,7 @@ func (dc *DiscordController) GetDiscordUserCard(ctx context.Context, searchStrin
 			online = online + " since " + convertDate(user.Sessions[0].Stop)
 		}
 
-		switchObj, err := dc.switchByIP(ctx, user.Sessions[0].SwitchIP)
+		switchObj, err := switches.ByIP(ctx, dc.db.Querier(), user.Sessions[0].SwitchIP)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
 			log.WithError(err).Warn("Switch lookup failed")
 		}
@@ -218,7 +205,7 @@ func (dc *DiscordController) renderLastSessions(ctx context.Context, buf *bytes.
 			break
 		}
 		switchName := "<unknown>"
-		mySwitch, err := dc.switchByIP(ctx, session.SwitchIP)
+		mySwitch, err := switches.ByIP(ctx, dc.db.Querier(), session.SwitchIP)
 		switch {
 		case err == nil:
 			switchName = mySwitch.Hostname + " (" + derefOr(mySwitch.Location, "") + ")"
@@ -313,7 +300,7 @@ func (dc *DiscordController) collectAvailableVLANs(ctx context.Context, user *Us
 	}
 
 	switchIP := user.Sessions[0].SwitchIP
-	switchRef, err := dc.switchByIP(ctx, switchIP)
+	switchRef, err := switches.ByIP(ctx, dc.db.Querier(), switchIP)
 	if errors.Is(err, db.ErrNotFound) {
 		log.WithField("ip", switchIP.String()).Warn("Unknown switch returned from RADIUS query!")
 		return nil

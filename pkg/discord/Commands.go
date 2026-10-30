@@ -303,9 +303,6 @@ func (d *Discord) queueVLANChange(ctx context.Context, macString string, targetV
 	if len(sessions) < 1 {
 		return errors.New("no radius session found for the mac specified")
 	}
-	if sessions[0].SwitchIP == nil {
-		return fmt.Errorf("session has no switch IP: %w", db.ErrNotFound)
-	}
 	switchRef, err := switches.ByIP(ctx, d.db.Querier(), sessions[0].SwitchIP)
 	if err != nil {
 		return err

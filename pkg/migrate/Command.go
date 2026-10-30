@@ -20,13 +20,7 @@ func RegisterArguments(flags *pflag.FlagSet) {
 
 // RunCommand applies all pending database migrations
 func RunCommand(ctx context.Context) error {
-	d, err := db.Open(ctx, db.Config{
-		Host:     config.CurrentOptions.DBHost,
-		Port:     config.CurrentOptions.DBPort,
-		User:     config.CurrentOptions.DBUser,
-		Password: config.CurrentOptions.DBPassword,
-		Database: config.CurrentOptions.DBDatabase,
-	})
+	d, err := db.Open(ctx, config.CurrentOptions.DB())
 	if err != nil {
 		return err
 	}
