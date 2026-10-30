@@ -113,6 +113,7 @@ func TestSample_FailedQueryKeepsValues(t *testing.T) {
 	})
 	const sw = "10.77.13.2" // unique to this test
 
+	resetVectors()
 	usersActive.Set(7)
 	usersActivePerSwitch.WithLabelValues(sw).Set(5)
 
