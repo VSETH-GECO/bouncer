@@ -56,6 +56,8 @@ func TestSample_DistinctUsers(t *testing.T) {
 	tx := testdb.Tx(t)
 	const sw = "10.77.13.1" // unique to this test
 
+	// Sample first so the baseline reflects what the shared database already holds, not the gauges' initial zero.
+	sample(ctx, tx)
 	activeBefore := gaugeValue(t, usersActive)
 	authorizedBefore := gaugeValue(t, usersAuthorized)
 
