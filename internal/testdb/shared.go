@@ -15,8 +15,9 @@ import (
 
 // Package-level state of the shared container, set by Main before any test runs and read-only afterwards.
 var (
-	shared    *db.DB
-	sharedErr error
+	shared       *db.DB
+	sharedConfig db.Config
+	sharedErr    error
 )
 
 // dockerHealth reports why Docker is unusable, or nil when it is healthy. It mirrors testcontainers'
@@ -60,6 +61,7 @@ func Main(m *testing.M) int {
 	if err != nil {
 		return startFailed(ci, m, err)
 	}
+	sharedConfig = inst.Config
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -101,6 +103,14 @@ func Shared(t *testing.T) *db.DB {
 		t.Skipf("test database unavailable: %v", sharedErr)
 	}
 	return shared
+}
+
+// SharedConfig returns the connection configuration of the package's shared container, for tests that open their own
+// connection. It skips or fails the test exactly like Shared.
+func SharedConfig(t *testing.T) db.Config {
+	t.Helper()
+	Shared(t)
+	return sharedConfig
 }
 
 // Tx begins a transaction on the shared database and rolls it back when the test ends, so tests leave no rows

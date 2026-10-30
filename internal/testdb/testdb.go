@@ -38,11 +38,8 @@ const (
 
 // Instance is a running MySQL container with the base schema loaded.
 type Instance struct {
-	Host     string
-	Port     int
-	User     string
-	Password string
-	Database string
+	// Config is the connection configuration of the container.
+	Config db.Config
 
 	container testcontainers.Container
 }
@@ -84,24 +81,20 @@ func Run(ctx context.Context) (*Instance, error) {
 		return nil, errors.Join(fmt.Errorf("resolving port of %s: %w", Image, err), ctr.Terminate(ctx))
 	}
 	return &Instance{
-		Host:      host,
-		Port:      int(port.Num()),
-		User:      "root",
-		Password:  rootPassword,
-		Database:  databaseName,
+		Config: db.Config{
+			Host:     host,
+			Port:     int(port.Num()),
+			User:     "root",
+			Password: rootPassword,
+			Database: databaseName,
+		},
 		container: ctr,
 	}, nil
 }
 
 // Open connects a db.DB to the instance.
 func (i *Instance) Open(ctx context.Context) (*db.DB, error) {
-	return db.Open(ctx, db.Config{Host: i.Host, Port: i.Port, User: i.User, Password: i.Password, Database: i.Database})
-}
-
-// DSN returns a go-sql-driver DSN for the instance. multiStatements lets migrations run several statements per Exec,
-// parseTime makes DATETIME columns scan into time.Time.
-func (i *Instance) DSN() string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?multiStatements=true&parseTime=true", i.User, i.Password, i.Host, i.Port, i.Database)
+	return db.Open(ctx, i.Config)
 }
 
 // Terminate stops and removes the container.

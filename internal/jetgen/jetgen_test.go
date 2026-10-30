@@ -28,7 +28,7 @@ func TestGeneratedCodeIsCurrent(t *testing.T) {
 	}
 
 	tmp := t.TempDir()
-	if err := jetgen.Generate(ctx, inst.DSN(), tmp); err != nil {
+	if err := jetgen.Generate(ctx, inst.Config.DSN(), tmp); err != nil {
 		t.Fatal(err)
 	}
 	committed := filepath.Join(thisDir(t), "..", "db", "gen")

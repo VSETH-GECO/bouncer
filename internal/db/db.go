@@ -6,11 +6,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"strconv"
 	"time"
 
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/table"
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 )
 
 // Config holds the connection parameters of the database.
@@ -20,6 +21,21 @@ type Config struct {
 	User     string
 	Password string
 	Database string
+}
+
+// DSN returns the go-sql-driver DSN for the configuration. It starts from the driver's defaults (mysql.NewConfig),
+// so settings such as allowNativePasswords are kept. multiStatements lets migrations run several statements per
+// Exec, parseTime makes DATETIME columns scan into time.Time.
+func (c Config) DSN() string {
+	mc := mysql.NewConfig()
+	mc.User = c.User
+	mc.Passwd = c.Password
+	mc.Net = "tcp"
+	mc.Addr = net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
+	mc.DBName = c.Database
+	mc.MultiStatements = true
+	mc.ParseTime = true
+	return mc.FormatDSN()
 }
 
 // Querier is the subset of methods shared by *sql.DB and *sql.Tx, so that queries can run either inside or outside of
@@ -37,8 +53,7 @@ type DB struct {
 // Open connects to the database and verifies the connection with a ping, so that bad credentials or an unreachable
 // server are reported at startup.
 func Open(ctx context.Context, cfg Config) (*DB, error) {
-	dsn := cfg.User + ":" + cfg.Password + "@tcp(" + cfg.Host + ":" + strconv.Itoa(cfg.Port) + ")/" + cfg.Database + "?multiStatements=true&parseTime=true"
-	pool, err := sql.Open("mysql", dsn)
+	pool, err := sql.Open("mysql", cfg.DSN())
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}

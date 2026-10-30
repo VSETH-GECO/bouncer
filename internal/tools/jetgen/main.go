@@ -54,5 +54,5 @@ func run(out string) (err error) {
 	if err := os.RemoveAll(out); err != nil {
 		return err
 	}
-	return jetgen.Generate(ctx, inst.DSN(), out)
+	return jetgen.Generate(ctx, inst.Config.DSN(), out)
 }
