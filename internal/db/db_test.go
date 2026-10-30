@@ -143,18 +143,25 @@ func TestWithTx_PanicRollsBack(t *testing.T) {
 	const mac = "020000000102"
 	count := jobRows(t, d, mac)
 
+	var txErr error
 	recovered := func() (r any) {
 		defer func() { r = recover() }()
-		_ = d.WithTx(ctx, func(tx db.Querier) error {
+		txErr = d.WithTx(ctx, func(tx db.Querier) error {
 			if err := insertJob(ctx, tx, mac); err != nil {
-				t.Fatalf("insert: %v", err)
+				return err
 			}
 			panic("boom")
 		})
 		return nil
 	}()
+	if txErr != nil {
+		t.Fatalf("WithTx: %v", txErr)
+	}
 	if recovered != "boom" {
 		t.Fatalf("recovered = %v, want boom", recovered)
+	}
+	if inUse := d.SQL().Stats().InUse; inUse != 0 {
+		t.Errorf("connections in use after panic = %d, want 0: the transaction's connection was not released", inUse)
 	}
 	if n := count(); n != 0 {
 		t.Fatalf("rows after panic = %d, want 0", n)
