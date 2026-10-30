@@ -65,6 +65,9 @@ func TestOpenCheckVersion(t *testing.T) {
 	if err := d.Migrate(ctx, 0); err != nil {
 		t.Fatalf("Migrate on a migrated database: %v", err)
 	}
+	if inUse := d.SQL().Stats().InUse; inUse != 0 {
+		t.Errorf("connections in use after CheckVersion and Migrate = %d, want 0: the migrator did not release its connection", inUse)
+	}
 }
 
 func TestOpen_BadPassword(t *testing.T) {

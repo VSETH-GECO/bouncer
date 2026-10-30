@@ -15,21 +15,39 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// newMigrator builds a migrator over the embedded migrations and the connection pool.
-func (d *DB) newMigrator() (*migrate.Migrate, error) {
+// newMigrator builds a migrator over the embedded migrations and a connection of its own taken from the pool. The
+// caller must close it with closeMigrator, which returns the connection to the pool.
+func (d *DB) newMigrator(ctx context.Context) (*migrate.Migrate, error) {
 	source, err := iofs.New(migrations.FS, ".")
 	if err != nil {
 		return nil, fmt.Errorf("loading migration sources: %w", err)
 	}
-	driver, err := mysqlDriver.WithInstance(d.sql, &mysqlDriver.Config{})
+	conn, err := d.sql.Conn(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("creating migration driver: %w", err)
+		return nil, fmt.Errorf("taking a connection for migrations: %w", err)
+	}
+	driver, err := mysqlDriver.WithConnection(ctx, conn, &mysqlDriver.Config{})
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("creating migration driver: %w", err), conn.Close())
 	}
 	m, err := migrate.NewWithInstance("iofs", source, "radius", driver)
 	if err != nil {
-		return nil, fmt.Errorf("creating migrator: %w", err)
+		return nil, errors.Join(fmt.Errorf("creating migrator: %w", err), conn.Close())
 	}
 	return m, nil
+}
+
+// closeMigrator closes m, which closes its connection and so returns it to the pool.
+func closeMigrator(m *migrate.Migrate) error {
+	srcErr, dbErr := m.Close()
+	var errs []error
+	if srcErr != nil {
+		errs = append(errs, fmt.Errorf("closing migration source: %w", srcErr))
+	}
+	if dbErr != nil {
+		errs = append(errs, fmt.Errorf("closing migration database: %w", dbErr))
+	}
+	return errors.Join(errs...)
 }
 
 // latestMigrationVersion returns the largest version among the embedded migrations.
@@ -60,13 +78,14 @@ func latestMigrationVersion() (uint, error) {
 	return uint(latest), nil
 }
 
-// Migrate updates the database schema to the current version. The migrate library does not take a context; ctx is
-// accepted for consistency with the other database methods.
-func (d *DB) Migrate(ctx context.Context, force int) error {
-	m, err := d.newMigrator()
+// Migrate updates the database schema to the current version. ctx bounds taking the migrator's connection; the
+// migrate library itself does not take a context.
+func (d *DB) Migrate(ctx context.Context, force int) (err error) {
+	m, err := d.newMigrator(ctx)
 	if err != nil {
 		return err
 	}
+	defer func() { err = errors.Join(err, closeMigrator(m)) }()
 	if force == 0 {
 		err = m.Up()
 	} else {
@@ -78,13 +97,14 @@ func (d *DB) Migrate(ctx context.Context, force int) error {
 	return nil
 }
 
-// CheckVersion ensures that we're running with the right database version. The migrate library does not take a
-// context; ctx is accepted for consistency with the other database methods.
-func (d *DB) CheckVersion(ctx context.Context) error {
-	m, err := d.newMigrator()
+// CheckVersion ensures that we're running with the right database version. ctx bounds taking the migrator's
+// connection; the migrate library itself does not take a context.
+func (d *DB) CheckVersion(ctx context.Context) (err error) {
+	m, err := d.newMigrator(ctx)
 	if err != nil {
 		return err
 	}
+	defer func() { err = errors.Join(err, closeMigrator(m)) }()
 	version, dirty, err := m.Version()
 	if err != nil {
 		return fmt.Errorf("reading schema version: %w", err)
