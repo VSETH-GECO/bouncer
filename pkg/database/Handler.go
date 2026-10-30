@@ -9,9 +9,11 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/VSETH-GECO/bouncer/migrations"
 	"github.com/VSETH-GECO/bouncer/pkg/config"
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/golang-migrate/migrate/v4"
 	mysqlDriver "github.com/golang-migrate/migrate/v4/database/mysql"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
@@ -66,6 +68,10 @@ func Open(ctx context.Context, host string, port int, user string, password stri
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
+	db.SetConnMaxLifetime(3 * time.Minute)
+	db.SetConnMaxIdleTime(time.Minute)
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("connecting to database: %w", err)
