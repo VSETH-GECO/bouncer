@@ -68,7 +68,7 @@ func Main(m *testing.M) int {
 		}
 	}()
 
-	d, err := inst.OpenDB(ctx)
+	d, err := inst.Open(ctx)
 	if err != nil {
 		return startFailed(ci, m, fmt.Errorf("connecting to test database: %w", err))
 	}

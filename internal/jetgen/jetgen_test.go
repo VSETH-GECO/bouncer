@@ -18,7 +18,7 @@ import (
 func TestGeneratedCodeIsCurrent(t *testing.T) {
 	inst := testdb.Start(t)
 	ctx := context.Background()
-	h, err := inst.Open(ctx) // old handler until the new layer replaces it
+	h, err := inst.Open(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

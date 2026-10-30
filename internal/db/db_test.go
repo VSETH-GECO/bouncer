@@ -72,9 +72,9 @@ func TestOpen_BadPassword(t *testing.T) {
 func TestWithTx(t *testing.T) {
 	inst := testdb.Start(t)
 	ctx := context.Background()
-	d, err := inst.OpenDB(ctx)
+	d, err := inst.Open(ctx)
 	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer d.Close()
 	if err := d.Migrate(ctx, 0); err != nil {

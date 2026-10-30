@@ -2,7 +2,7 @@
 //
 // base-schema.sql is the FreeRADIUS and Kea schema from production (tables, triggers, routines and the Kea lookup
 // rows), without bouncer's own tables. Those come from bouncer's migrations, which callers apply through
-// database.Handler.Migrate, exactly as the daemon does at startup.
+// db.DB.Migrate, exactly as the daemon does at startup.
 //
 // The container listens on a random host port chosen by Docker. Never point tests at 127.0.0.1:3306: on developer
 // machines that port may be a port-forward to the production database.
@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
-	"github.com/VSETH-GECO/bouncer/pkg/database"
 	"github.com/testcontainers/testcontainers-go"
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 )
@@ -94,13 +93,8 @@ func Run(ctx context.Context) (*Instance, error) {
 	}, nil
 }
 
-// Open connects a database.Handler to the instance.
-func (i *Instance) Open(ctx context.Context) (*database.Handler, error) {
-	return database.Open(ctx, i.Host, i.Port, i.User, i.Password, i.Database)
-}
-
-// OpenDB connects a db.DB to the instance.
-func (i *Instance) OpenDB(ctx context.Context) (*db.DB, error) {
+// Open connects a db.DB to the instance.
+func (i *Instance) Open(ctx context.Context) (*db.DB, error) {
 	return db.Open(ctx, db.Config{Host: i.Host, Port: i.Port, User: i.User, Password: i.Password, Database: i.Database})
 }
 

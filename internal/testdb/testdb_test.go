@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/testdb"
 )
 
@@ -18,49 +19,67 @@ func TestMigrationsApplyOnBaseSchema(t *testing.T) {
 
 	inst := testdb.Start(t)
 
-	db, err := inst.Open(ctx)
+	d, err := inst.Open(ctx)
 	if err != nil {
 		t.Fatalf("connecting to test database: %v", err)
 	}
-	defer db.Close()
+	defer d.Close()
 
-	if err := db.Migrate(ctx, 0); err != nil {
+	if err := d.Migrate(ctx, 0); err != nil {
 		t.Fatalf("applying migrations: %v", err)
 	}
-	// CheckDBVersion compares the database against the newest embedded migration, so this is the version
+	// CheckVersion compares the database against the newest embedded migration, so this is the version
 	// assertion without hard-coding a number.
-	if err := db.CheckDBVersion(ctx); err != nil {
+	if err := d.CheckVersion(ctx); err != nil {
 		t.Fatalf("schema version after migrating: %v", err)
 	}
 	// Running the migrations again must be a no-op.
-	if err := db.Migrate(ctx, 0); err != nil {
+	if err := d.Migrate(ctx, 0); err != nil {
 		t.Fatalf("re-applying migrations: %v", err)
 	}
 
 	// The fixture's seed data and bouncer's tables coexist in the one database.
-	var leaseStates int
-	if err := db.DB().QueryRowContext(ctx, "SELECT COUNT(*) FROM lease_state").Scan(&leaseStates); err != nil {
-		t.Fatalf("querying fixture seed table: %v", err)
-	}
-	if leaseStates == 0 {
+	if n := count(t, ctx, d, "SELECT COUNT(*) FROM lease_state"); n == 0 {
 		t.Fatal("lease_state has no rows: base schema fixture was not loaded")
 	}
-	var pendingJobs int
-	if err := db.DB().QueryRowContext(ctx, "SELECT COUNT(*) FROM bouncer_jobs").Scan(&pendingJobs); err != nil {
-		t.Fatalf("querying bouncer_jobs: %v", err)
-	}
-	if pendingJobs != 0 {
-		t.Fatalf("bouncer_jobs should start empty, has %d rows", pendingJobs)
+	if n := count(t, ctx, d, "SELECT COUNT(*) FROM bouncer_jobs"); n != 0 {
+		t.Fatalf("bouncer_jobs should start empty, has %d rows", n)
 	}
 
-	var nullable string
-	err = db.DB().QueryRowContext(ctx,
-		"SELECT GROUP_CONCAT(is_nullable ORDER BY column_name) FROM information_schema.columns WHERE table_schema='freeradius' AND table_name='bouncer_log' AND column_name IN ('switchIP','switchPort')").Scan(&nullable)
-	if err != nil {
-		t.Fatal(err)
-	}
+	nullable := queryString(t, ctx, d,
+		"SELECT GROUP_CONCAT(is_nullable ORDER BY column_name) FROM information_schema.columns WHERE table_schema='freeradius' AND table_name='bouncer_log' AND column_name IN ('switchIP','switchPort')")
 	if nullable != "YES,YES" {
 		t.Fatalf("bouncer_log switchIP/switchPort nullable = %q, want YES,YES", nullable)
+	}
+}
+
+// count runs a single-row, single-integer query.
+func count(t *testing.T, ctx context.Context, d *db.DB, query string) int {
+	t.Helper()
+	var n int
+	scanOne(t, ctx, d, query, &n)
+	return n
+}
+
+func queryString(t *testing.T, ctx context.Context, d *db.DB, query string) string {
+	t.Helper()
+	var s string
+	scanOne(t, ctx, d, query, &s)
+	return s
+}
+
+func scanOne(t *testing.T, ctx context.Context, d *db.DB, query string, dest any) {
+	t.Helper()
+	rows, err := d.Querier().QueryContext(ctx, query)
+	if err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatalf("%s returned no row: %v", query, rows.Err())
+	}
+	if err := rows.Scan(dest); err != nil {
+		t.Fatalf("%s: %v", query, err)
 	}
 }
 
