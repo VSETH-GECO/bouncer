@@ -61,11 +61,16 @@ func run(out string) (err error) {
 // regenerate runs generate against a fresh temporary directory next to out and swaps it in only on success,
 // so a failed generation leaves the existing tree untouched.
 func regenerate(out string, generate func(dir string) error) error {
+	out = filepath.Clean(out) // a trailing separator would put the temp directory inside out
 	tmp, err := os.MkdirTemp(filepath.Dir(out), ".jetgen-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmp) // no-op once the rename has succeeded
+	// MkdirTemp creates the directory 0700; the swapped-in tree should be a normal 0755 one.
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		return err
+	}
 	if err := generate(tmp); err != nil {
 		return fmt.Errorf("generate: %w", err)
 	}

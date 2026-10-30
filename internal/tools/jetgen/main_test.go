@@ -84,4 +84,28 @@ func TestRegenerate_SuccessReplaces(t *testing.T) {
 		t.Error("keep.txt survived a successful regeneration")
 	}
 	onlyGen(t, parent)
+	info, err := os.Stat(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Errorf("out mode = %o, want 755", got)
+	}
+}
+
+func TestRegenerate_TrailingSeparator(t *testing.T) {
+	parent, out := newOut(t)
+	err := regenerate(out+string(filepath.Separator), func(dir string) error {
+		return os.WriteFile(filepath.Join(dir, "new.txt"), []byte("new"), 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists(t, filepath.Join(out, "new.txt")) {
+		t.Error("new.txt missing after success")
+	}
+	if exists(t, filepath.Join(out, "keep.txt")) {
+		t.Error("keep.txt survived a successful regeneration")
+	}
+	onlyGen(t, parent)
 }
