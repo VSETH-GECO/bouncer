@@ -208,3 +208,41 @@ func TestFindMAC_BadHwaddrIsError(t *testing.T) {
 		t.Errorf("err = %v, want a non-ErrNotFound error", err)
 	}
 }
+
+func TestFindMAC_HostnameWildcardsAreLiteral(t *testing.T) {
+	ctx, q := begin(t)
+	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	mA := mac.MustParse("00:11:22:33:44:61")
+	mB := mac.MustParse("00:11:22:33:44:62")
+	seedLease4(t, q, mA, net.ParseIP("10.20.0.61"), ptr("max_pc"+kea.HostnameSuffix), t0)
+	seedLease4(t, q, mB, net.ParseIP("10.20.0.62"), ptr("maxxpc"+kea.HostnameSuffix), t0.Add(time.Hour))
+
+	for value, want := range map[string]mac.MAC{"max_pc": mA, "maxxpc": mB} {
+		got, err := kea.FindMAC(ctx, q, value)
+		if err != nil {
+			t.Errorf("FindMAC(%q): %v", value, err)
+		} else if got != want {
+			t.Errorf("FindMAC(%q) = %v, want %v", value, got, want)
+		}
+	}
+	if _, err := kea.FindMAC(ctx, q, "max%"); !errors.Is(err, db.ErrNotFound) {
+		t.Errorf("max%%: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestFindMAC_Lease6Only(t *testing.T) {
+	ctx, q := begin(t)
+	mC := mac.MustParse("00:11:22:33:44:63")
+	seedLease6(t, q, mC, net.ParseIP("fd00::63"))
+
+	got, err := kea.FindMAC(ctx, q, "fd00::63")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != mC {
+		t.Errorf("FindMAC(fd00::63) = %v, want %v", got, mC)
+	}
+	if _, err := kea.FindMAC(ctx, q, "fd00::64"); !errors.Is(err, db.ErrNotFound) {
+		t.Errorf("fd00::64: err = %v, want ErrNotFound", err)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/model"
@@ -20,7 +21,7 @@ const HostnameSuffix = ".lan.geco.ethz.ch"
 // FindMAC finds the MAC of a client from a hostname, an IPv4 or IPv6 address or a MAC, using the leases. It returns
 // an error wrapping db.ErrNotFound if no lease matches.
 func FindMAC(ctx context.Context, q db.Querier, value string) (mac.MAC, error) {
-	cond := table.Lease4.Hostname.LIKE(mysql.String(value + HostnameSuffix + "%"))
+	cond := table.Lease4.Hostname.LIKE(mysql.String(escapeLike(value) + HostnameSuffix + "%"))
 	ip := net.ParseIP(value)
 	if v4 := ip.To4(); v4 != nil {
 		cond = cond.OR(table.Lease4.Address.EQ(mysql.Uint32(binary.BigEndian.Uint32(v4))))
@@ -62,6 +63,13 @@ func FindMAC(ctx context.Context, q db.Querier, value string) (mac.MAC, error) {
 	}
 	return mac.MAC{}, fmt.Errorf("no lease matches %q: %w", value, db.ErrNotFound)
 }
+
+// likeEscaper escapes the LIKE metacharacters; the backslash comes first so the escapes it adds are not doubled.
+// MySQL's default LIKE escape character is the backslash.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// escapeLike makes s match literally inside a LIKE pattern.
+func escapeLike(s string) string { return likeEscaper.Replace(s) }
 
 func fromHwaddr(hw *[]byte, what string) (mac.MAC, error) {
 	if hw != nil {
