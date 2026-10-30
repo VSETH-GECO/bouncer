@@ -1,10 +1,16 @@
 services:
   mysql:
-    image: mysql:8
+    # Pinned to the production server version. The init script loads the base schema
+    # (FreeRADIUS + Kea tables, triggers and routines); run `bouncer migrate` afterwards
+    # to add bouncer's own tables on top.
+    image: mysql:8.0.36
     volumes:
       - /var/lib/mysql
+      - ./internal/testdb/base-schema.sql:/docker-entrypoint-initdb.d/00-base-schema.sql:ro
     ports:
-      - "3306:3306"
+      # Bound to localhost on a non-default port so it can never collide with a
+      # port-forward to the production database on 3306.
+      - "127.0.0.1:33306:3306"
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: freeradius
