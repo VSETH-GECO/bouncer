@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -14,7 +14,7 @@ import (
 	"github.com/VSETH-GECO/bouncer/pkg/config"
 	"github.com/golang-migrate/migrate/v4"
 	mysqlDriver "github.com/golang-migrate/migrate/v4/database/mysql"
-	bindata "github.com/golang-migrate/migrate/v4/source/go_bindata"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -121,25 +121,57 @@ func (h *Handler) WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	return nil
 }
 
-// Migrate updates the database schema to the current version. The migrate library does not take a context; ctx is
-// accepted for consistency with the other database methods.
-func (h *Handler) Migrate(ctx context.Context, force int) error {
-	s := bindata.Resource(migrations.AssetNames(),
-		func(name string) ([]byte, error) {
-			val, err := migrations.Asset(name)
-			return val, err
-		})
-	source, err := bindata.WithInstance(s)
+// newMigrator builds a migrator over the embedded migrations and the handler's connection pool.
+func (h *Handler) newMigrator() (*migrate.Migrate, error) {
+	source, err := iofs.New(migrations.FS, ".")
 	if err != nil {
-		return fmt.Errorf("loading migration sources: %w", err)
+		return nil, fmt.Errorf("loading migration sources: %w", err)
 	}
 	driver, err := mysqlDriver.WithInstance(h.db, &mysqlDriver.Config{})
 	if err != nil {
-		return fmt.Errorf("creating migration driver: %w", err)
+		return nil, fmt.Errorf("creating migration driver: %w", err)
 	}
-	m, err := migrate.NewWithInstance("go-bindata", source, "radius", driver)
+	m, err := migrate.NewWithInstance("iofs", source, "radius", driver)
 	if err != nil {
-		return fmt.Errorf("creating migrator: %w", err)
+		return nil, fmt.Errorf("creating migrator: %w", err)
+	}
+	return m, nil
+}
+
+// latestMigrationVersion returns the largest version among the embedded migrations.
+func latestMigrationVersion() (uint, error) {
+	entries, err := fs.ReadDir(migrations.FS, ".")
+	if err != nil {
+		return 0, fmt.Errorf("listing embedded migrations: %w", err)
+	}
+	var latest uint64
+	found := false
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".up.sql") {
+			continue
+		}
+		prefix, _, _ := strings.Cut(name, "_")
+		v, err := strconv.ParseUint(prefix, 10, 32)
+		if err != nil {
+			return 0, fmt.Errorf("parsing version of migration %q: %w", name, err)
+		}
+		if !found || v > latest {
+			latest, found = v, true
+		}
+	}
+	if !found {
+		return 0, errors.New("no embedded migrations found")
+	}
+	return uint(latest), nil
+}
+
+// Migrate updates the database schema to the current version. The migrate library does not take a context; ctx is
+// accepted for consistency with the other database methods.
+func (h *Handler) Migrate(ctx context.Context, force int) error {
+	m, err := h.newMigrator()
+	if err != nil {
+		return err
 	}
 	if force == 0 {
 		err = m.Up()
@@ -155,46 +187,26 @@ func (h *Handler) Migrate(ctx context.Context, force int) error {
 // CheckDBVersion ensures that we're running with the right database version. The migrate library does not take a
 // context; ctx is accepted for consistency with the other database methods.
 func (h *Handler) CheckDBVersion(ctx context.Context) error {
-	s := bindata.Resource(migrations.AssetNames(),
-		func(name string) ([]byte, error) {
-			val, err := migrations.Asset(name)
-			return val, err
-		})
-	source, err := bindata.WithInstance(s)
+	m, err := h.newMigrator()
 	if err != nil {
-		return fmt.Errorf("loading migration sources: %w", err)
-	}
-	driver, err := mysqlDriver.WithInstance(h.db, &mysqlDriver.Config{})
-	if err != nil {
-		return fmt.Errorf("creating migration driver: %w", err)
-	}
-	m, err := migrate.NewWithInstance("go-bindata", source, "radius", driver)
-	if err != nil {
-		return fmt.Errorf("creating migrator: %w", err)
+		return err
 	}
 	version, dirty, err := m.Version()
 	if err != nil {
 		return fmt.Errorf("reading schema version: %w", err)
 	}
-	names := s.Names
-	sort.Strings(names)
-	lastMigration := names[len(names)-1]
-	nameParts := strings.Split(lastMigration, "_")
-	if len(nameParts) < 2 {
-		return fmt.Errorf("unexpected migration resource name %q", lastMigration)
-	}
-	latestVersion, err := strconv.ParseUint(nameParts[0], 10, 16)
+	latestVersion, err := latestMigrationVersion()
 	if err != nil {
-		return fmt.Errorf("parsing version of migration %q: %w", lastMigration, err)
+		return err
 	}
 	entry := log.WithFields(log.Fields{
 		"latestVersion": latestVersion,
 		"version":       version,
 		"dirty":         dirty,
 	})
-	if uint(latestVersion) == version {
+	if latestVersion == version {
 		entry.Debug("Database version is matching newest version at build time")
-	} else if uint(latestVersion) > version {
+	} else if latestVersion > version {
 		return fmt.Errorf("database schema version %d is older than newest version %d at build time", version, latestVersion)
 	} else {
 		entry.Warn("Database version is newer than newest version at build time")

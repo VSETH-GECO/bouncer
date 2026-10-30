@@ -28,19 +28,7 @@ _physically_ toggle, therefore the client will also fetch a new DHCP lease if ne
 ## Build
 
 This requires golang >= 1.11 and optionally a debian machine/container, in case you
-want to build the package. You'll also need [go-bindata](https://github.com/kevinburke/go-bindata)
-in your path, just do
-
-```bash
-go install github.com/kevinburke/go-bindata/v4/...@latest
-```
-
-in case you have `$GOPATH/bin` in your path.
-You'll then need to generate sources using
-
-```bash
-go generate github.com/VSETH-GECO/bouncer/...
-```
+want to build the package.
 
 For the debian package:
 

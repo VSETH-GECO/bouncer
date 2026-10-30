@@ -51,4 +51,14 @@ func TestMigrationsApplyOnBaseSchema(t *testing.T) {
 	if pendingJobs != 0 {
 		t.Fatalf("bouncer_jobs should start empty, has %d rows", pendingJobs)
 	}
+
+	var nullable string
+	err = db.DB().QueryRowContext(ctx,
+		"SELECT GROUP_CONCAT(is_nullable ORDER BY column_name) FROM information_schema.columns WHERE table_schema='freeradius' AND table_name='bouncer_log' AND column_name IN ('switchIP','switchPort')").Scan(&nullable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nullable != "YES,YES" {
+		t.Fatalf("bouncer_log switchIP/switchPort nullable = %q, want YES,YES", nullable)
+	}
 }
