@@ -41,3 +41,7 @@ Binary only:
 ```bash
 go build -o bouncer github.com/VSETH-GECO/bouncer/cmd
 ```
+
+## Regenerating query code
+
+The go-jet table and model code under `internal/db/gen` is generated from the schema fixture plus bouncer's migrations. This needs Docker. After changing the schema or migrations, run `go run ./internal/tools/jetgen` from the module root and commit the result. `go test ./internal/jetgen` fails when the committed code is stale.

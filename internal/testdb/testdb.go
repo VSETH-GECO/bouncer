@@ -98,6 +98,12 @@ func (i *Instance) Open(ctx context.Context) (*database.Handler, error) {
 	return database.Open(ctx, i.Host, i.Port, i.User, i.Password, i.Database)
 }
 
+// DSN returns a go-sql-driver DSN for the instance. multiStatements lets migrations run several statements per Exec,
+// parseTime makes DATETIME columns scan into time.Time.
+func (i *Instance) DSN() string {
+	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?multiStatements=true&parseTime=true", i.User, i.Password, i.Host, i.Port, i.Database)
+}
+
 // Terminate stops and removes the container.
 func (i *Instance) Terminate(ctx context.Context) error {
 	return i.container.Terminate(ctx)
