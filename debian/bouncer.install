@@ -1,3 +1,0 @@
-#!/usr/bin/dh-exec
-
-debian/bouncer/usr/bin/cmd => /usr/bin/bouncer

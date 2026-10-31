@@ -11,7 +11,7 @@ ADD internal ./internal
 ADD migrations ./migrations
 ADD pkg ./pkg
 
-RUN go build -o /bouncer ./cmd
+RUN go build -o /bouncer ./cmd/bouncer
 
 FROM scratch
 

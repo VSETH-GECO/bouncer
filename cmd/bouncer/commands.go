@@ -1,4 +1,4 @@
-package bouncer
+package main
 
 import (
 	"github.com/VSETH-GECO/bouncer/pkg/config"
@@ -7,19 +7,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// MigrateCmd is the cobra command object for database migrations
-var MigrateCmd = &cobra.Command{
-	Use:     "migrate updates the database schema",
-	Aliases: []string{"migrate"},
+// migrateCmd updates the database schema
+var migrateCmd = &cobra.Command{
+	Use:   "migrate",
+	Short: "Update the database schema",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return migrate.RunCommand(cmd.Context())
 	},
 }
 
-// ServeCmd is the cobra command object for the main server loop
-var ServeCmd = &cobra.Command{
-	Use:     "run starts the bouncer daemon",
-	Aliases: []string{"run"},
+// serveCmd runs the main server loop, after applying pending migrations
+var serveCmd = &cobra.Command{
+	Use:   "run",
+	Short: "Start the bouncer daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := migrate.RunCommand(cmd.Context()); err != nil {
 			return err
@@ -28,8 +28,8 @@ var ServeCmd = &cobra.Command{
 	},
 }
 
-// RootCmd is the cobra root command object
-var RootCmd = &cobra.Command{
+// rootCmd is the cobra root command
+var rootCmd = &cobra.Command{
 	Use:  "bouncer",
 	Long: "CoA RADIUS daemon",
 	// main logs the returned error exactly once
@@ -37,15 +37,15 @@ var RootCmd = &cobra.Command{
 	SilenceErrors: true,
 }
 
-// SetupCommands initializes all commands
-func SetupCommands() {
-	RootCmd.AddCommand(MigrateCmd)
-	RootCmd.AddCommand(ServeCmd)
+// setupCommands registers the subcommands and all flags
+func setupCommands() {
+	rootCmd.AddCommand(migrateCmd)
+	rootCmd.AddCommand(serveCmd)
 
-	config.RegisterGlobalArguments(RootCmd.PersistentFlags())
+	config.RegisterGlobalArguments(rootCmd.PersistentFlags())
 
-	run.RegisterArguments(ServeCmd.PersistentFlags())
-	migrate.RegisterArguments(MigrateCmd.PersistentFlags())
+	run.RegisterArguments(serveCmd.PersistentFlags())
+	migrate.RegisterArguments(migrateCmd.PersistentFlags())
 
 	cobra.OnInitialize(config.LoadConfig)
 }

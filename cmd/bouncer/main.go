@@ -7,12 +7,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/VSETH-GECO/bouncer/cmd/bouncer"
 	log "github.com/sirupsen/logrus"
 )
 
 func main() {
-	bouncer.SetupCommands()
+	setupCommands()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -21,7 +20,7 @@ func main() {
 		stop()
 	}()
 
-	err := bouncer.RootCmd.ExecuteContext(ctx)
+	err := rootCmd.ExecuteContext(ctx)
 	// Read before stop(), which cancels ctx as well
 	shutdownRequested := ctx.Err() != nil
 	stop()

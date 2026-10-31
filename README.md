@@ -27,20 +27,13 @@ _physically_ toggle, therefore the client will also fetch a new DHCP lease if ne
 
 ## Build
 
-This requires Go 1.25 and optionally a debian machine/container, in case you
-want to build the package.
-
-For the debian package:
+This requires Go 1.25.
 
 ```bash
-dpkg-buildpackage -b -us -uc
+go build -o bouncer ./cmd/bouncer
 ```
 
-Binary only:
-
-```bash
-go build -o bouncer github.com/VSETH-GECO/bouncer/cmd
-```
+The container image is built from the `Dockerfile`.
 
 ## Running the tests
 
