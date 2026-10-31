@@ -40,19 +40,40 @@ func Pending(ctx context.Context, q db.Querier) ([]Job, error) {
 
 	list := make([]Job, 0, len(rows))
 	for _, r := range rows {
-		j := Job{
-			ID:         int(r.ID),
-			RawMAC:     r.ClientMAC,
-			TargetVLAN: int(r.TargetVLAN),
-			LastUpdate: r.LastUpdate,
-			Retries:    int(r.Retires),
-		}
-		if m, err := mac.Parse(r.ClientMAC); err == nil {
-			j.MAC = m
-		}
-		list = append(list, j)
+		list = append(list, fromRow(r))
 	}
 	return list, nil
+}
+
+// Latest returns the newest job (highest id) of m whatever its retry count, so unlike Pending it includes jobs that
+// ran out of retries. It returns an error wrapping db.ErrNotFound if m has no job.
+func Latest(ctx context.Context, q db.Querier, m mac.MAC) (Job, error) {
+	var row model.BouncerJobs
+	err := mysql.SELECT(table.BouncerJobs.AllColumns).
+		FROM(table.BouncerJobs).
+		WHERE(table.BouncerJobs.ClientMAC.EQ(mysql.String(m.Hex()))).
+		ORDER_BY(table.BouncerJobs.ID.DESC()).
+		LIMIT(1).
+		QueryContext(ctx, q, &row)
+	if err != nil {
+		return Job{}, fmt.Errorf("looking up latest job of %s: %w", m.Hex(), db.NotFound(err))
+	}
+	return fromRow(row), nil
+}
+
+// fromRow converts a bouncer_jobs row, leaving MAC zero when the stored value does not parse.
+func fromRow(r model.BouncerJobs) Job {
+	j := Job{
+		ID:         int(r.ID),
+		RawMAC:     r.ClientMAC,
+		TargetVLAN: int(r.TargetVLAN),
+		LastUpdate: r.LastUpdate,
+		Retries:    int(r.Retires),
+	}
+	if m, err := mac.Parse(r.ClientMAC); err == nil {
+		j.MAC = m
+	}
+	return j
 }
 
 // minVLAN and maxVLAN bound the VLAN IDs usable on a port: 802.1Q reserves 0 and 4095.

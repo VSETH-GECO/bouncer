@@ -3,16 +3,19 @@ package jobs_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/model"
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/table"
 	"github.com/VSETH-GECO/bouncer/internal/jobs"
 	"github.com/VSETH-GECO/bouncer/internal/mac"
 	"github.com/VSETH-GECO/bouncer/internal/testdb"
+	"github.com/VSETH-GECO/bouncer/internal/testgen"
 	"github.com/go-jet/jet/v2/mysql"
 )
 
@@ -220,5 +223,35 @@ func TestCreate_RejectsOutOfRangeVLAN(t *testing.T) {
 	}
 	if got := pending(); len(got) != 2 || got[0] != 1 || got[1] != 4094 {
 		t.Errorf("pending VLANs = %v, want [1 4094]", got)
+	}
+}
+
+func TestLatest(t *testing.T) {
+	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
+	m := p.MAC()
+
+	if _, err := jobs.Latest(ctx, q, m); !errors.Is(err, db.ErrNotFound) {
+		t.Fatalf("Latest without jobs: err = %v, want db.ErrNotFound", err)
+	}
+
+	older := p.Job(func(j *model.BouncerJobs) { j.ClientMAC, j.TargetVLAN = m.Hex(), 10 })
+	newer := p.Job(func(j *model.BouncerJobs) {
+		j.ClientMAC, j.TargetVLAN, j.Retires = m.Hex(), 20, jobs.MaxRetries
+	})
+	p.Job() // another client's job, newer still
+
+	got, err := jobs.Latest(ctx, q, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != int(newer.ID) || got.ID == int(older.ID) {
+		t.Errorf("Latest = job %d, want the newer job %d", got.ID, newer.ID)
+	}
+	if got.MAC != m || got.RawMAC != m.Hex() || got.TargetVLAN != 20 || got.Retries != jobs.MaxRetries {
+		t.Errorf("Latest = %+v, want MAC %v VLAN 20 retries %d (exhausted rows included)", got, m, jobs.MaxRetries)
+	}
+	if !got.LastUpdate.Equal(newer.LastUpdate) {
+		t.Errorf("LastUpdate = %v, want %v", got.LastUpdate, newer.LastUpdate)
 	}
 }

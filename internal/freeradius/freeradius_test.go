@@ -297,3 +297,80 @@ func TestFindMAC_BadUsername(t *testing.T) {
 		t.Errorf("error %q does not name the row", err)
 	}
 }
+
+func TestOpenSessions(t *testing.T) {
+	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
+	withVLAN, withoutReply, closed := p.MAC(), p.MAC(), p.MAC()
+	p.Authorized(withVLAN, 1234)
+	p.Authorized(closed, 1235)
+	stop := time.Now().UTC().Truncate(time.Second)
+
+	open := p.Session(func(r *model.Radacct) { r.Username = withVLAN.Hex() })
+	bare := p.Session(func(r *model.Radacct) { r.Username = withoutReply.Hex() })
+	gone := p.Session(func(r *model.Radacct) { r.Username, r.Acctstoptime = closed.Hex(), &stop })
+	odd := p.Session(func(r *model.Radacct) { r.Username = "not-a-mac" })
+
+	sessions, err := freeradius.OpenSessions(ctx, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]freeradius.OpenSession{}
+	for _, s := range sessions {
+		byID[s.SessionID] = s
+	}
+
+	check := func(name string, row model.Radacct, want freeradius.OpenSession) {
+		t.Helper()
+		got, ok := byID[row.Acctsessionid]
+		if !ok {
+			t.Errorf("%s: session %s missing", name, row.Acctsessionid)
+			return
+		}
+		if got.MAC != want.MAC || got.RawMAC != want.RawMAC || got.SessionID != want.SessionID ||
+			!got.SwitchIP.Equal(want.SwitchIP) || got.AssignedVLAN != want.AssignedVLAN {
+			t.Errorf("%s: got %+v, want %+v", name, got, want)
+		}
+	}
+	check("with radreply", open, freeradius.OpenSession{
+		MAC: withVLAN, RawMAC: withVLAN.Hex(), SessionID: open.Acctsessionid,
+		SwitchIP: net.ParseIP(open.Nasipaddress), AssignedVLAN: 1234,
+	})
+	check("without radreply", bare, freeradius.OpenSession{
+		MAC: withoutReply, RawMAC: withoutReply.Hex(), SessionID: bare.Acctsessionid,
+		SwitchIP: net.ParseIP(bare.Nasipaddress),
+	})
+	check("username not a MAC", odd, freeradius.OpenSession{
+		RawMAC: "not-a-mac", SessionID: odd.Acctsessionid, SwitchIP: net.ParseIP(odd.Nasipaddress),
+	})
+	if _, ok := byID[gone.Acctsessionid]; ok {
+		t.Error("closed session returned")
+	}
+}
+
+func TestOpenSessions_UnparsableVLAN(t *testing.T) {
+	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
+	m := p.MAC()
+	_, err := table.Radreply.INSERT(table.Radreply.MutableColumns).MODEL(model.Radreply{
+		Username: m.Hex(), Attribute: freeradius.AttrVLAN, Op: freeradius.OpSet, Value: "guest",
+	}).ExecContext(ctx, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := p.Session(func(r *model.Radacct) { r.Username = m.Hex() })
+
+	sessions, err := freeradius.OpenSessions(ctx, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range sessions {
+		if s.SessionID == row.Acctsessionid {
+			if s.AssignedVLAN != 0 || s.MAC != m {
+				t.Errorf("got %+v, want MAC %v and AssignedVLAN 0", s, m)
+			}
+			return
+		}
+	}
+	t.Error("session missing")
+}
