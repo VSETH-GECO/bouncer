@@ -50,20 +50,28 @@ func Run(ctx context.Context, l Loop) error {
 	if sleep == nil {
 		sleep = timerSleep
 	}
+	initSeries(l.Name, l.Interval)
+	defer deleteSeries(l.Name)
 	slog.Info("Loop started", "loop", l.Name, "interval", l.Interval)
 
 	failures := 0
 	for {
+		start := time.Now()
 		r := runRound(ctx, l.Round)
+		took := time.Since(start)
 
 		// Classify the round. Every outcome is decided here and nowhere else.
+		var res string
+		var next time.Duration
 		switch {
 		case r.panicked:
 			failures++
+			res, next = resultPanic, wait(l.Interval, l.MaxWait, failures)
 			slog.Error("Loop round panicked", "loop", l.Name, "panic", r.panic, "stack", r.stack,
-				"failures", failures, "retryIn", wait(l.Interval, l.MaxWait, failures))
+				"failures", failures, "retryIn", next)
 		case r.err == nil:
 			failures = 0
+			res, next = resultSuccess, l.Interval
 			if l.Beat != nil {
 				l.Beat()
 			}
@@ -72,14 +80,18 @@ func Run(ctx context.Context, l Loop) error {
 			return ctx.Err()
 		default:
 			failures++
+			res, next = resultError, wait(l.Interval, l.MaxWait, failures)
 			slog.Warn("Loop round failed", "loop", l.Name, "error", r.err,
-				"failures", failures, "retryIn", wait(l.Interval, l.MaxWait, failures))
+				"failures", failures, "retryIn", next)
 		}
+		recordRound(l.Name, res, took, failures)
 
+		// A round that ended with ctx done is recorded, but no wait follows it.
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := sleep(ctx, wait(l.Interval, l.MaxWait, failures)); err != nil {
+		recordWait(l.Name, next)
+		if err := sleep(ctx, next); err != nil {
 			return err
 		}
 	}
