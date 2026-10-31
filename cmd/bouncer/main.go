@@ -11,8 +11,6 @@ import (
 )
 
 func main() {
-	setupCommands()
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		// Restore default signal handling once a shutdown was requested, so that a second signal kills us right away
@@ -20,7 +18,7 @@ func main() {
 		stop()
 	}()
 
-	err := rootCmd.ExecuteContext(ctx)
+	err := newRootCmd().ExecuteContext(ctx)
 	// Read before stop(), which cancels ctx as well
 	shutdownRequested := ctx.Err() != nil
 	stop()

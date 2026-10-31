@@ -33,16 +33,16 @@ type Discord struct {
 	macCache   map[string]string
 }
 
-// NewDiscord returns a new discord handler
-func NewDiscord(d *db.DB) *Discord {
+// NewDiscord returns a new discord handler configured by cfg
+func NewDiscord(d *db.DB, cfg config.Discord) *Discord {
 	obj := &Discord{
 		db:                 d,
 		ctx:                context.Background(),
-		allowedUsers:       config.CurrentOptions.DiscordUsers,
-		logChannel:         config.CurrentOptions.DiscordLogChannel,
-		privateInfoChannel: config.CurrentOptions.DiscordPrivateInfoChannel,
-		token:              config.CurrentOptions.DiscordToken,
-		guildId:            config.CurrentOptions.DiscordGuildID,
+		allowedUsers:       cfg.Users,
+		logChannel:         cfg.LogChannel,
+		privateInfoChannel: cfg.PrivateInfoChannel,
+		token:              cfg.Token,
+		guildId:            cfg.GuildID,
 		commandIds:         map[string]string{},
 		vlanCache:          map[string]string{},
 		macCache:           map[string]string{},
