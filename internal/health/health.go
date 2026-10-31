@@ -72,6 +72,12 @@ func (h *Heartbeat) Beat() {
 	h.beaten = true
 }
 
+// Name returns the name the heartbeat was registered under.
+func (h *Heartbeat) Name() string { return h.name }
+
+// MaxAge returns the age beyond which the heartbeat makes the registry unhealthy.
+func (h *Heartbeat) MaxAge() time.Duration { return h.maxAge }
+
 // Stop unregisters the heartbeat. Calling it more than once is harmless.
 func (h *Heartbeat) Stop() {
 	h.r.mu.Lock()

@@ -80,8 +80,11 @@ func ExecCommand(ctx context.Context, cfg config.Config) error {
 
 	if cfg.Run.Prometheus {
 		mux.Handle("/metrics", metrics.Handler())
+		// Registered before the probes are served, so /readyz waits for the sampler's first round
+		sampler := probes.Heartbeat("metrics-sampler", heartbeatMaxAge)
+		defer sampler.Stop()
 		group.Go(func() error {
-			return runLoop(groupCtx, probes, "metrics-sampler", samplerInterval, heartbeatMaxAge,
+			return runLoop(groupCtx, sampler, samplerInterval,
 				func(ctx context.Context) error { return metrics.Sample(ctx, d.Querier()) })
 		})
 	}
@@ -104,16 +107,14 @@ func ExecCommand(ctx context.Context, cfg config.Config) error {
 	return group.Wait()
 }
 
-// runLoop registers a heartbeat for the loop, runs it through loop.Run with a backoff cap of half the heartbeat
-// window, and unregisters the heartbeat when the loop ends.
-func runLoop(ctx context.Context, probes *health.Registry, name string, interval, maxAge time.Duration,
-	round func(context.Context) error) error {
-	hb := probes.Heartbeat(name, maxAge)
-	defer hb.Stop()
+// runLoop runs round as a loop named after hb until ctx is cancelled, beating hb after every successful round, with a
+// backoff cap of half hb's window so a failing loop always gets another try before the liveness probe gives up on it.
+// The caller registers hb before starting the loop and stops it when the loop's scope ends.
+func runLoop(ctx context.Context, hb *health.Heartbeat, interval time.Duration, round func(context.Context) error) error {
 	return loop.Run(ctx, loop.Loop{
-		Name:     name,
+		Name:     hb.Name(),
 		Interval: interval,
-		MaxWait:  maxAge / 2,
+		MaxWait:  hb.MaxAge() / 2,
 		Round:    round,
 		Beat:     hb.Beat,
 	})
@@ -125,6 +126,10 @@ func runLoop(ctx context.Context, probes *health.Registry, name string, interval
 func runLeader(ctx context.Context, d *db.DB, cfg config.Config, probes *health.Registry) error {
 	metrics.SetLeader(true)
 	defer metrics.SetLeader(false)
+
+	// Registered before the bot starts, so a Setup that stalls fails liveness and hands the lease over
+	jobLoop := probes.Heartbeat("job-loop", heartbeatMaxAge)
+	defer jobLoop.Stop()
 
 	group, groupCtx := errgroup.WithContext(ctx)
 
@@ -140,7 +145,7 @@ func runLeader(ctx context.Context, d *db.DB, cfg config.Config, probes *health.
 
 	jobController := controller.NewJobController(d, cfg.SwitchCOASecret, radius.Sender{})
 	group.Go(func() error {
-		return runLoop(groupCtx, probes, "job-loop", jobInterval, heartbeatMaxAge, jobController.Work)
+		return runLoop(groupCtx, jobLoop, jobInterval, jobController.Work)
 	})
 
 	return group.Wait()

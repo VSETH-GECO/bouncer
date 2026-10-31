@@ -231,3 +231,12 @@ func TestConcurrentBeats(t *testing.T) {
 	cancel()
 	wg.Wait()
 }
+
+func TestHeartbeat_Accessors(t *testing.T) {
+	r := New()
+	hb := r.Heartbeat("job-loop", time.Minute)
+	defer hb.Stop()
+	if hb.Name() != "job-loop" || hb.MaxAge() != time.Minute {
+		t.Errorf("Name, MaxAge = %q, %v, want %q, %v", hb.Name(), hb.MaxAge(), "job-loop", time.Minute)
+	}
+}
