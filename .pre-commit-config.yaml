@@ -1,18 +1,33 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
+# The tests are not a hook: they need Docker, and CI runs them on every push.
 repos:
--   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v2.0.0
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
     hooks:
-    -   id: trailing-whitespace
-    -   id: end-of-file-fixer
-    -   id: check-yaml
-    -   id: check-added-large-files
--   repo: https://github.com/dnephin/pre-commit-golang
-    rev: v0.3.4
+      - id: trailing-whitespace
+        exclude: ^internal/db/gen/|^internal/testdb/base-schema\.sql$
+      - id: end-of-file-fixer
+        exclude: ^internal/db/gen/|^internal/testdb/base-schema\.sql$
+      - id: check-yaml
+      - id: check-added-large-files
+  - repo: local
     hooks:
-    -   id: go-fmt
-    -   id: go-vet
-    -   id: go-lint
-        exclude: migrations
-    -   id: go-unit-tests
+      - id: gofmt
+        name: gofmt
+        entry: bash -c 'unformatted=$(gofmt -l ./cmd ./pkg ./internal); if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi'
+        language: system
+        pass_filenames: false
+        files: \.go$
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        pass_filenames: false
+        files: \.go$
+      - id: go-mod-tidy
+        name: go mod tidy
+        entry: go mod tidy -diff
+        language: system
+        pass_filenames: false
+        files: \.go$|go\.(mod|sum)$
