@@ -9,9 +9,9 @@
 //
 // Each round of the reconciliation loop takes every client's newest Access-Accept within the accept window,
 // compares the client's current assigned VLAN with the event VLANs of that accept's switch and, unless the
-// Reconciler runs dry, queues a job moving each stuck client to the login VLAN. The job loop then rewrites radreply
-// and clears the leases, as for any other job, and the switch's next authentication of the client lands it in the
-// login VLAN.
+// Reconciler runs dry, queues a job moving each stuck client to the login VLAN. The job loop then processes it as any
+// other job; with no open session it sends no CoA, only rewrites radreply and clears the leases, and the switch's next
+// authentication of the client lands it in the login VLAN.
 package reconcile
 
 import (

@@ -66,6 +66,11 @@ func NewJobController(d Store, switchSecret string, coa CoASender) *JobControlle
 // ProcessMoveVLANJob processes a job that moves a host between VLANs, taking care of all database updates. On success
 // the job is deleted from the queue in the same transaction; on error nothing is persisted and the caller is
 // responsible for the retry bookkeeping.
+//
+// Only the client's newest open session (no stop time) counts: it receives the CoA and its switch and port are logged
+// as where the client was kicked from. A closed session is a leftover of an earlier stay, possibly on another switch,
+// and is ignored; a client without an open session gets no CoA and a log row without switch columns, and its switch
+// places it in the new VLAN on its next authentication.
 func (c *JobController) ProcessMoveVLANJob(ctx context.Context, job *jobs.Job) error {
 	// Let's see whether this host can actually be found
 	sessions, err := freeradius.SessionsForMAC(ctx, c.db.Querier(), job.MAC)
@@ -73,8 +78,11 @@ func (c *JobController) ProcessMoveVLANJob(ctx context.Context, job *jobs.Job) e
 		return fmt.Errorf("looking up sessions: %w", err)
 	}
 	var session *freeradius.Session
-	if len(sessions) > 0 {
-		session = &sessions[0]
+	for i := range sessions {
+		if sessions[i].Stop == nil {
+			session = &sessions[i] // sessions come newest start first
+			break
+		}
 	}
 
 	var (
@@ -115,7 +123,8 @@ func (c *JobController) ProcessMoveVLANJob(ctx context.Context, job *jobs.Job) e
 			return jobs.Delete(ctx, tx, job.ID)
 		}
 
-		// If there is a running session, force the switch to reauth
+		// If the client has an open session, force its switch to reauthenticate it; a closed session's switch no
+		// longer knows the session, so it gets nothing
 		if session != nil {
 			var start time.Time
 			if session.Start != nil {

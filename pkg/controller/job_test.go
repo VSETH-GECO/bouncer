@@ -349,6 +349,69 @@ func TestProcess_KnownClientWithoutSession(t *testing.T) {
 	assertNullSwitch(t, rows[0])
 }
 
+// TestProcess_ClosedSessionGetsNoCoA covers a client whose only session is closed, a leftover of an earlier stay: it
+// gets no CoA and the log row names no switch, but the move and the lease cleanup still happen.
+func TestProcess_ClosedSessionGetsNoCoA(t *testing.T) {
+	h := newHarness(t)
+	m := h.client()
+	h.p.Authorized(m, 10)
+	h.session(m, func(r *model.Radacct) { r.Acctstoptime = ptr(time.Now().UTC().Truncate(time.Second)) })
+	h.lease4(m)
+	job := h.queue(m, 20)
+
+	if err := h.c.ProcessMoveVLANJob(h.ctx, job); err != nil {
+		t.Fatalf("ProcessMoveVLANJob: %v", err)
+	}
+	if len(h.coa.calls) != 0 {
+		t.Errorf("CoA calls = %d (%+v), want 0", len(h.coa.calls), h.coa.calls)
+	}
+	if v := h.vlan(m); v != 20 {
+		t.Errorf("AssignedVLAN = %d, want 20", v)
+	}
+	if h.hasLease4(m) {
+		t.Error("lease4 still there, want it cleared")
+	}
+	rows := h.logRows(m)
+	if len(rows) != 1 {
+		t.Fatalf("log rows = %d, want 1", len(rows))
+	}
+	if r := rows[0]; r.SwitchIP != nil || r.SwitchPort != nil {
+		t.Errorf("log row switch = %s %s, want NULL", deref(r.SwitchIP), deref(r.SwitchPort))
+	}
+}
+
+// TestProcess_OpenSessionWinsOverNewerClosedOne covers a client with an open session and a newer closed one: the
+// open session gets the CoA and is logged as where the client was kicked from.
+func TestProcess_OpenSessionWinsOverNewerClosedOne(t *testing.T) {
+	h := newHarness(t)
+	m := h.client()
+	h.p.Authorized(m, 10)
+	now := time.Now().UTC().Truncate(time.Second)
+	open := h.session(m, func(r *model.Radacct) { r.Acctstarttime = ptr(now.Add(-3 * time.Hour)) })
+	h.session(m, func(r *model.Radacct) {
+		r.Nasipaddress, r.Nasportid = "10.10.0.2", ptr("GigabitEthernet1/0/9")
+		r.Acctstarttime, r.Acctstoptime = ptr(now.Add(-time.Hour)), ptr(now)
+	})
+	job := h.queue(m, 20)
+
+	if err := h.c.ProcessMoveVLANJob(h.ctx, job); err != nil {
+		t.Fatalf("ProcessMoveVLANJob: %v", err)
+	}
+	if len(h.coa.calls) != 1 {
+		t.Fatalf("CoA calls = %d, want 1", len(h.coa.calls))
+	}
+	if req := h.coa.calls[0]; req.SessionUID != open.Acctsessionid || !req.SwitchIP.Equal(net.ParseIP(switchIP)) {
+		t.Errorf("CoA to session %q on %v, want %q on %s", req.SessionUID, req.SwitchIP, open.Acctsessionid, switchIP)
+	}
+	rows := h.logRows(m)
+	if len(rows) != 1 {
+		t.Fatalf("log rows = %d, want 1", len(rows))
+	}
+	if r := rows[0]; deref(r.SwitchIP) != switchIP || deref(r.SwitchPort) != switchPort {
+		t.Errorf("log row switch = %s %s, want %s %s", deref(r.SwitchIP), deref(r.SwitchPort), switchIP, switchPort)
+	}
+}
+
 func TestWork_MalformedMACRetires(t *testing.T) {
 	h := newHarness(t)
 	const bad = "not-a-mac"
