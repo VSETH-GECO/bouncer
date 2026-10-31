@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/model"
-	"github.com/VSETH-GECO/bouncer/internal/freeradius"
 	"github.com/VSETH-GECO/bouncer/internal/mac"
 	"github.com/VSETH-GECO/bouncer/internal/testdb"
 	"github.com/VSETH-GECO/bouncer/internal/testgen"
@@ -49,17 +48,13 @@ func TestSample_DistinctUsers(t *testing.T) {
 
 	a := mac.MustParse("02:00:00:00:13:0a")
 	b := mac.MustParse("02:00:00:00:13:0b")
-	if err := freeradius.Authorize(ctx, tx, a, 100); err != nil {
-		t.Fatal(err)
-	}
-	if err := freeradius.Authorize(ctx, tx, b, 100); err != nil {
-		t.Fatal(err)
-	}
+	p := testgen.Persistent(t, tx)
+	p.Authorized(a, 100)
+	p.Authorized(b, 100)
 	stop := time.Now()
 	on := func(m mac.MAC, stop *time.Time) func(*model.Radacct) {
 		return func(r *model.Radacct) { r.Username, r.Nasipaddress, r.Acctstoptime = m.Hex(), sw, stop }
 	}
-	p := testgen.Persistent(t, tx)
 	p.Session(on(a, nil))
 	p.Session(on(a, nil))
 	p.Session(on(b, &stop))

@@ -172,12 +172,10 @@ func TestCounts(t *testing.T) {
 	before := takeCounts(t, ctx, q)
 	a, b, c := mac.MustParse("00:11:22:33:44:5a"), mac.MustParse("00:11:22:33:44:5b"), mac.MustParse("00:11:22:33:44:5c")
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	for _, m := range []mac.MAC{a, b} {
-		if err := freeradius.Authorize(ctx, q, m, 42); err != nil {
-			t.Fatal(err)
-		}
-	}
 	p := testgen.Persistent(t, q)
+	for _, m := range []mac.MAC{a, b} {
+		p.Authorized(m, 42)
+	}
 	stop := now.Add(time.Hour)
 	p.Session(session(a, &now, nil))
 	p.Session(session(a, &now, nil))
@@ -219,13 +217,9 @@ func TestPerVLANAndPerSwitch(t *testing.T) {
 
 	a, b := mac.MustParse("00:11:22:33:44:5d"), mac.MustParse("00:11:22:33:44:5e")
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	if err := freeradius.Authorize(ctx, q, a, 42); err != nil {
-		t.Fatal(err)
-	}
-	if err := freeradius.Authorize(ctx, q, b, 7); err != nil {
-		t.Fatal(err)
-	}
 	p := testgen.Persistent(t, q)
+	p.Authorized(a, 42)
+	p.Authorized(b, 7)
 	p.Session(session(a, &now, nil), func(r *model.Radacct) { r.Nasipaddress = "10.10.0.1" })
 	p.Session(session(b, &now, nil), func(r *model.Radacct) { r.Nasipaddress = "10.10.0.2" })
 
