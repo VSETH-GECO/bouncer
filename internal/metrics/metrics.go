@@ -11,6 +11,7 @@ import (
 	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/freeradius"
 	"github.com/VSETH-GECO/bouncer/internal/loop"
+	"github.com/VSETH-GECO/bouncer/internal/reconcile"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -59,6 +60,7 @@ func register(r prometheus.Registerer) {
 	r.MustRegister(usersTotal, usersAuthorized, usersActive, usersActivePerVLAN, usersAuthorizedPerVLAN, usersActivePerSwitch,
 		leader)
 	loop.Register(r)
+	reconcile.Register(r)
 }
 
 // SetLeader records whether this replica currently leads (runs the jobs and the Discord bot).
