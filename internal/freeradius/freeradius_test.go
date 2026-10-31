@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -233,5 +235,65 @@ func TestPerVLANAndPerSwitch(t *testing.T) {
 		if swAfter[s]-swBefore[s] != 1 {
 			t.Errorf("switch %s delta %d, want 1", s, swAfter[s]-swBefore[s])
 		}
+	}
+}
+
+func TestFindMAC_ByMAC(t *testing.T) {
+	ctx, q := begin(t)
+	m := mac.MustParse("00:11:22:33:44:61")
+	testgen.Persistent(t, q).Session(session(m, nil, nil))
+	for _, search := range []string{m.Hex(), m.String(), "00-11-22-33-44-61"} {
+		got, err := freeradius.FindMAC(ctx, q, search)
+		if err != nil {
+			t.Fatalf("FindMAC(%q): %v", search, err)
+		}
+		if got != m {
+			t.Errorf("FindMAC(%q) = %v, want %v", search, got, m)
+		}
+	}
+}
+
+func TestFindMAC_ByIPNewestWins(t *testing.T) {
+	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
+	older, newer := mac.MustParse("00:11:22:33:44:62"), mac.MustParse("00:11:22:33:44:63")
+	ip := p.IPv4().String()
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	later := base.Add(time.Hour)
+	framed := func(r *model.Radacct) { r.Framedipaddress = ip }
+	p.Session(session(newer, &later, nil), framed)
+	p.Session(session(older, &base, &later), framed)
+
+	got, err := freeradius.FindMAC(ctx, q, ip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != newer {
+		t.Errorf("got %v, want the newest session's %v", got, newer)
+	}
+}
+
+func TestFindMAC_NotFound(t *testing.T) {
+	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
+	for _, search := range []string{"00:11:22:33:44:64", p.IPv4().String(), "some-hostname", "2001:db8::1"} {
+		if m, err := freeradius.FindMAC(ctx, q, search); !errors.Is(err, db.ErrNotFound) {
+			t.Errorf("FindMAC(%q) = %v, %v; want ErrNotFound", search, m, err)
+		}
+	}
+}
+
+func TestFindMAC_BadUsername(t *testing.T) {
+	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
+	ip := p.IPv4().String()
+	row := p.Session(func(r *model.Radacct) { r.Username, r.Framedipaddress = "not-a-mac", ip })
+
+	_, err := freeradius.FindMAC(ctx, q, ip)
+	if err == nil || errors.Is(err, db.ErrNotFound) {
+		t.Fatalf("err = %v, want a non-not-found error", err)
+	}
+	if !strings.Contains(err.Error(), "not-a-mac") || !strings.Contains(err.Error(), strconv.FormatInt(row.Radacctid, 10)) {
+		t.Errorf("error %q does not name the row", err)
 	}
 }

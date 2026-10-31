@@ -34,13 +34,24 @@ func derefOr(p *string, missing string) string {
 }
 
 // findMAC looks up a client's MAC by username or MAC in the login log, falling back to the DHCP leases (hostname, IP
-// or MAC). It returns an error wrapping db.ErrNotFound if no source knows the value.
+// or MAC) and then to the RADIUS sessions (MAC or framed IPv4 address). A source is skipped only when it does not
+// know the value; any other error ends the search. It returns an error wrapping db.ErrNotFound if no source knows
+// the value.
 func findMAC(ctx context.Context, q db.Querier, search string) (mac.MAC, error) {
-	m, err := logins.FindMAC(ctx, q, search)
-	if errors.Is(err, db.ErrNotFound) {
-		return kea.FindMAC(ctx, q, search)
+	sources := []func(context.Context, db.Querier, string) (mac.MAC, error){
+		logins.FindMAC,
+		kea.FindMAC,
+		freeradius.FindMAC,
 	}
-	return m, err
+	var err error
+	for _, find := range sources {
+		var m mac.MAC
+		m, err = find(ctx, q, search)
+		if !errors.Is(err, db.ErrNotFound) {
+			return m, err
+		}
+	}
+	return mac.MAC{}, err
 }
 
 // loadUser assembles everything known about the client with the given MAC

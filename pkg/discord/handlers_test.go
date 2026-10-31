@@ -171,7 +171,7 @@ func TestUserCommandResponse(t *testing.T) {
 	resp, _ := f.d.userCommandResponse(f.ctx, "ab", true)
 	wantMessage(t, resp, msgInvalidQuery)
 
-	resp, _ = f.d.userCommandResponse(f.ctx, f.m.Hex(), false)
+	resp, _ = f.d.userCommandResponse(f.ctx, f.m.String(), false)
 	if resp.Type != discordgo.InteractionResponseChannelMessageWithSource || len(resp.Data.Embeds) != 1 {
 		t.Errorf("user command: type %v, %d embeds, want a new message with the card", resp.Type, len(resp.Data.Embeds))
 	}
@@ -179,7 +179,7 @@ func TestUserCommandResponse(t *testing.T) {
 		t.Errorf("user command: %d component rows, want none", len(resp.Data.Components))
 	}
 
-	resp, _ = f.d.userCommandResponse(f.ctx, f.m.Hex(), true)
+	resp, _ = f.d.userCommandResponse(f.ctx, strings.ToUpper(strings.ReplaceAll(f.m.String(), ":", "-")), true)
 	got := controls(t, resp)
 	for _, a := range []controller.CardAction{controller.ActionSelectVLAN, controller.ActionLogout, controller.ActionChange, controller.ActionCancel} {
 		c, ok := got[a]

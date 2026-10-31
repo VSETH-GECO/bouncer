@@ -153,3 +153,54 @@ func TestLatestUsername_MatchesUppercaseStored(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "user_test")
 	}
 }
+
+func TestFindMAC_MatchesStoredSeparatorForms(t *testing.T) {
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	t.Run("colon_stored", func(t *testing.T) {
+		ctx, q := begin(t)
+		m := mac.MustParse("aa:bb:cc:dd:ee:01")
+		testgen.Persistent(t, q).LoginLog(login("user_colon", "AA:BB:CC:DD:EE:01", base))
+		for _, search := range []string{"aabbccddee01", "aa:bb:cc:dd:ee:01", "AA-BB-CC-DD-EE-01"} {
+			got, err := logins.FindMAC(ctx, q, search)
+			if err != nil {
+				t.Fatalf("FindMAC(%q): %v", search, err)
+			}
+			if got != m {
+				t.Errorf("FindMAC(%q) = %v, want %v", search, got, m)
+			}
+		}
+		if got, err := logins.LatestUsername(ctx, q, m); err != nil || got != "user_colon" {
+			t.Errorf("LatestUsername = %q, %v, want user_colon", got, err)
+		}
+	})
+
+	t.Run("hex_stored", func(t *testing.T) {
+		ctx, q := begin(t)
+		m := mac.MustParse("aa:bb:cc:dd:ee:02")
+		testgen.Persistent(t, q).LoginLog(login("user_hex", "aabbccddee02", base))
+		got, err := logins.FindMAC(ctx, q, "aa:bb:cc:dd:ee:02")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != m {
+			t.Errorf("got %v, want %v", got, m)
+		}
+	})
+
+	t.Run("non_mac_search_matches_usernames_only", func(t *testing.T) {
+		ctx, q := begin(t)
+		m := mac.MustParse("aa:bb:cc:dd:ee:03")
+		testgen.Persistent(t, q).LoginLog(login("frank", "AA:BB:CC:DD:EE:03", base))
+		if _, err := logins.FindMAC(ctx, q, "aabbccddee"); !errors.Is(err, db.ErrNotFound) {
+			t.Errorf("FindMAC(partial MAC): err = %v, want ErrNotFound", err)
+		}
+		got, err := logins.FindMAC(ctx, q, "Frank")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != m {
+			t.Errorf("got %v, want %v", got, m)
+		}
+	})
+}

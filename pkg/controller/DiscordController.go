@@ -166,6 +166,11 @@ func (dc *DiscordController) GetDiscordUserCard(ctx context.Context, searchStrin
 					Inline: true,
 				},
 				{
+					Name:   "Email",
+					Value:  derefOr(&user.Email, "_unknown_"),
+					Inline: true,
+				},
+				{
 					Name:  "Online",
 					Value: online,
 				},

@@ -52,3 +52,43 @@ func SessionsForMAC(ctx context.Context, q db.Querier, m mac.MAC) ([]Session, er
 	}
 	return sessions, nil
 }
+
+// FindMAC finds the MAC of a client from its RADIUS sessions: a MAC (in any form mac.Parse accepts) that has a
+// session, or an IPv4 address framed to a session, in which case the newest such session (by start time) wins. It
+// returns an error wrapping db.ErrNotFound if value is neither or no session matches, and a different error if the
+// matching session's username is not a MAC.
+func FindMAC(ctx context.Context, q db.Querier, value string) (mac.MAC, error) {
+	if m, err := mac.Parse(value); err == nil {
+		var row model.Radacct
+		err := mysql.SELECT(table.Radacct.Radacctid).
+			FROM(table.Radacct).
+			WHERE(table.Radacct.Username.EQ(mysql.String(m.Hex()))).
+			LIMIT(1).
+			QueryContext(ctx, q, &row)
+		if err != nil {
+			return mac.MAC{}, fmt.Errorf("searching RADIUS sessions of %s: %w", m.Hex(), db.NotFound(err))
+		}
+		return m, nil
+	}
+
+	if ip := net.ParseIP(value).To4(); ip != nil {
+		var row model.Radacct
+		err := mysql.SELECT(table.Radacct.Radacctid, table.Radacct.Username).
+			FROM(table.Radacct).
+			WHERE(table.Radacct.Framedipaddress.EQ(mysql.String(ip.String()))).
+			ORDER_BY(table.Radacct.Acctstarttime.DESC()).
+			LIMIT(1).
+			QueryContext(ctx, q, &row)
+		if err != nil {
+			return mac.MAC{}, fmt.Errorf("searching RADIUS sessions framed to %s: %w", ip, db.NotFound(err))
+		}
+		m, err := mac.Parse(row.Username)
+		if err != nil {
+			return mac.MAC{}, fmt.Errorf("RADIUS session %d framed to %s has username %q, not a MAC: %w",
+				row.Radacctid, ip, row.Username, err)
+		}
+		return m, nil
+	}
+
+	return mac.MAC{}, fmt.Errorf("no RADIUS session matches %q: %w", value, db.ErrNotFound)
+}

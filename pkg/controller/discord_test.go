@@ -202,6 +202,7 @@ func TestUserCard_LongCardFull(t *testing.T) {
 	wantField(t, c, "IP", fc.ip)
 	wantField(t, c, "IPv6", fc.ip6)
 	wantField(t, c, "Username", "alice")
+	wantField(t, c, "Email", "N/A")
 	if online, _ := field(c, "Online"); !strings.HasPrefix(online, "✅") {
 		t.Errorf("Online = %q, want it to start with ✅", online)
 	}
@@ -282,7 +283,6 @@ func TestUserCard_NotLoggedInShowsLoginButton(t *testing.T) {
 	h := newHarness(t)
 	sw := h.testSwitch()
 	m := h.client()
-	h.lease4(m) // findMAC only searches the login log and the leases, not the sessions
 	h.p.Session(func(r *model.Radacct) { r.Username = m.Hex() }, onSwitch(sw.IPs[0].IP, "GigabitEthernet1/0/8"))
 
 	c := h.card(m.String(), true)
@@ -334,19 +334,14 @@ func TestUserCard_EmailUsername(t *testing.T) {
 	const email = "carol@example.org"
 	h.login(m, email)
 
-	// Without a lease the MAC is found through the login log, which matches only the stored hex form.
-	c := h.card(m.Hex(), false)
-	if c.RealMAC != m.Hex() {
-		t.Fatalf("RealMAC = %q, want %q", c.RealMAC, m.Hex())
-	}
-	wantField(t, c, "Username", "N/A")
-	// The card has no email field: loadUser moves the address into User.Email, which nothing renders.
-	for _, e := range c.Embeds {
-		for _, f := range e.Fields {
-			if strings.Contains(f.Value, email) {
-				t.Errorf("embed field %q shows the email %q", f.Name, f.Value)
-			}
+	// Without a lease or a session the MAC is found through the login log, by the username or the MAC in any form.
+	for _, search := range []string{email, m.Hex(), m.String(), strings.ToUpper(strings.ReplaceAll(m.String(), ":", "-"))} {
+		c := h.card(search, false)
+		if c.RealMAC != m.Hex() {
+			t.Fatalf("search %q: RealMAC = %q, want %q", search, c.RealMAC, m.Hex())
 		}
+		wantField(t, c, "Username", "N/A")
+		wantField(t, c, "Email", email)
 	}
 	u, err := loadUser(h.ctx, h.tx, m)
 	if err != nil {
@@ -354,6 +349,26 @@ func TestUserCard_EmailUsername(t *testing.T) {
 	}
 	if u.Name != "N/A" || u.Email != email {
 		t.Errorf("loadUser Name, Email = %q, %q, want %q, %q", u.Name, u.Email, "N/A", email)
+	}
+}
+
+func TestUserCard_SessionOnlyClient(t *testing.T) {
+	h := newHarness(t)
+	sw := h.testSwitch()
+	m := h.client()
+	ip := h.p.IPv4().String()
+	h.p.Session(func(r *model.Radacct) { r.Username, r.Framedipaddress = m.Hex(), ip },
+		onSwitch(sw.IPs[0].IP, "GigabitEthernet1/0/10"))
+
+	for _, search := range []string{m.String(), ip} {
+		c := h.card(search, true)
+		if c.RealMAC != m.Hex() {
+			t.Errorf("search %q: RealMAC = %q, want %q", search, c.RealMAC, m.Hex())
+			continue
+		}
+		wantField(t, c, "MAC", m.String())
+		wantField(t, c, "Switch port", "GigabitEthernet1/0/10")
+		wantButton(t, c, ActionLogin, m)
 	}
 }
 
