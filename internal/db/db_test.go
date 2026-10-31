@@ -70,6 +70,23 @@ func TestOpenCheckVersion(t *testing.T) {
 	}
 }
 
+func TestOpen_SessionTimeZoneIsUTC(t *testing.T) {
+	ctx := context.Background()
+	d, err := db.Open(ctx, testdb.SharedConfig(t))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	var tz string
+	if err := d.SQL().QueryRowContext(ctx, "SELECT @@session.time_zone").Scan(&tz); err != nil {
+		t.Fatal(err)
+	}
+	if tz != "+00:00" {
+		t.Errorf("session time_zone = %q, want %q", tz, "+00:00")
+	}
+}
+
 func TestOpen_BadPassword(t *testing.T) {
 	cfg := testdb.SharedConfig(t)
 	cfg.Password = "wrong"

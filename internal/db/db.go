@@ -25,7 +25,10 @@ type Config struct {
 
 // DSN returns the go-sql-driver DSN for the configuration. It starts from the driver's defaults (mysql.NewConfig),
 // so settings such as allowNativePasswords are kept. multiStatements lets migrations run several statements per
-// Exec, parseTime makes DATETIME columns scan into time.Time.
+// Exec, parseTime makes DATETIME columns scan into time.Time. The driver parses time values as UTC, so the session's
+// time_zone is pinned to UTC too, whatever the server's default is: the server then renders TIMESTAMP columns (such as
+// radpostauth.authdate, bouncer_jobs.last_update, radacct's times and Kea's lease expiry) in the zone the driver
+// reads them in, and interprets the times bouncer sends in the same zone.
 func (c Config) DSN() string {
 	mc := mysql.NewConfig()
 	mc.User = c.User
@@ -35,6 +38,7 @@ func (c Config) DSN() string {
 	mc.DBName = c.Database
 	mc.MultiStatements = true
 	mc.ParseTime = true
+	mc.Params = map[string]string{"time_zone": "'+00:00'"}
 	return mc.FormatDSN()
 }
 
