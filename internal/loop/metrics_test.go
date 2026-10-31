@@ -178,3 +178,41 @@ func TestRun_RecordsResults(t *testing.T) {
 	}
 	expectNoSeries(t)
 }
+
+func TestRun_RecordsSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	rec := &recorder{}
+	err := Run(ctx, Loop{
+		Name:     "t",
+		Interval: 5 * time.Second,
+		MaxWait:  30 * time.Second,
+		Round: func(context.Context) error {
+			calls++
+			switch calls {
+			case 1:
+				return errors.New("fail")
+			case 2:
+				panic("boom")
+			case 3:
+				return nil
+			}
+			expectValue(t, "rounds", rounds, map[string]string{"loop": "t", "result": resultSuccess}, 1)
+			expectValue(t, "consecutiveFailures", consecutiveFailures, map[string]string{"loop": "t"}, 0)
+			expectValue(t, "waitSeconds", waitSeconds, map[string]string{"loop": "t"}, 5)
+			if got, ok := value(t, lastSuccess, map[string]string{"loop": "t"}); !ok {
+				t.Error("lastSuccess{loop=t}: no series after a success")
+			} else if now := float64(time.Now().Unix()); got < now-5 || got > now+5 {
+				t.Errorf("lastSuccess{loop=t} = %v, want within 5 s of %v", got, now)
+			}
+			cancel()
+			return nil
+		},
+		sleep: rec.sleep,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Run = %v, want context.Canceled", err)
+	}
+	expectNoSeries(t)
+}
