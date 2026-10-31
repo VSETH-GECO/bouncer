@@ -1,4 +1,4 @@
-// Package metrics samples the user counts from the database into Prometheus gauges and serves them over HTTP.
+// Package metrics samples the user counts from the database into Prometheus gauges and provides the handler that serves them.
 package metrics
 
 import (
@@ -12,7 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// The collectors are registered by Serve, not at init, so that importing this package has no side effects.
+// The collectors are registered by Handler, not at init, so that importing this package has no side effects.
 var (
 	usersTotal = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "bouncer_users_total",
@@ -115,9 +115,16 @@ func sample(ctx context.Context, q db.Querier) {
 	slog.Debug("Updating prometheus metrics done!")
 }
 
-// runSampler samples immediately and then every few seconds until ctx is cancelled.
-func runSampler(ctx context.Context, q db.Querier) {
-	sample(ctx, q)
+// RunSampler samples immediately and then every few seconds until ctx is cancelled. It calls beat (if not nil) after
+// every completed sample, failed queries included.
+func RunSampler(ctx context.Context, q db.Querier, beat func()) {
+	round := func() {
+		sample(ctx, q)
+		if beat != nil {
+			beat()
+		}
+	}
+	round()
 
 	ticker := time.NewTicker(7 * time.Second)
 	defer ticker.Stop()
@@ -126,7 +133,7 @@ func runSampler(ctx context.Context, q db.Querier) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			sample(ctx, q)
+			round()
 		}
 	}
 }

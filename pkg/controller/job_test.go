@@ -470,7 +470,7 @@ func TestSpin_ReturnsOnCancelledContext(t *testing.T) {
 	cancel()
 
 	done := make(chan error, 1)
-	go func() { done <- h.c.Spin(ctx) }()
+	go func() { done <- h.c.Spin(ctx, nil) }()
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
@@ -478,5 +478,29 @@ func TestSpin_ReturnsOnCancelledContext(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Spin did not return within a second of a cancelled context")
+	}
+}
+
+func TestSpin_BeatsOncePerRound(t *testing.T) {
+	h := newHarness(t)
+	ctx, cancel := context.WithCancel(h.ctx)
+	defer cancel()
+
+	beats := 0
+	done := make(chan error, 1)
+	go func() {
+		// Cancel at the first beat: the loop then returns before its next round, 5 s away.
+		done <- h.c.Spin(ctx, func() { beats++; cancel() })
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Spin: err = %v, want context.Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Spin did not return within 3 s of its first beat being cancelled")
+	}
+	if beats != 1 {
+		t.Errorf("beats = %d, want 1", beats)
 	}
 }

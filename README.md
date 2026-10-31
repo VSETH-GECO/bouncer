@@ -39,6 +39,8 @@ The container image is built from the `Dockerfile`.
 
 bouncer runs with two replicas in Kubernetes. They elect a leader through the lease `bouncer` (`coordination.k8s.io`) in the pod's namespace, using the in-cluster configuration, `POD_NAMESPACE` and `POD_NAME`; the service account needs get/list/watch/create/update/patch on leases. Only the leader processes jobs and runs the Discord bot; when it loses the lease it exits and is restarted as a follower, and on shutdown it releases the lease so the other replica takes over within seconds. Every replica serves `/metrics` (`bouncer_leader` is 1 on the leader). To run a single instance locally, outside Kubernetes, pass `--leader-elect=false`.
 
+Every replica answers the probes on the metrics port (`prometheusPort`, default 2112), which is bound even with `--usePrometheus=false` (that only drops `/metrics` and its sampler). `/healthz` is the liveness probe: it is 200 while the daemon's loops (the metrics sampler, and on the leader the job loop) keep completing rounds, and 503 once one of them has not done so for 60 s. A database outage does not fail it, since the loops keep ticking with errors. `/readyz` is the readiness probe: liveness plus a database ping with a 2 s timeout. `/metrics` serves the Prometheus metrics.
+
 ## Running the tests
 
 The integration tests need Docker. `go test ./...` starts one MySQL 8.0.36 container per run, shared by all test packages and removed by testcontainers' reaper shortly after the run ends. Without Docker the integration tests are skipped; with `CI=1` set that is a failure instead. Tests that insert random rows log their seed: rerun with `TESTGEN_SEED=<seed>` to reproduce them.

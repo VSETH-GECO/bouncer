@@ -240,8 +240,9 @@ func (c *JobController) work(ctx context.Context) error {
 	return nil
 }
 
-// Spin loops over the work queue until ctx is cancelled, then returns ctx.Err()
-func (c *JobController) Spin(ctx context.Context) error {
+// Spin loops over the work queue until ctx is cancelled, then returns ctx.Err(). It calls beat (if not nil) after every
+// round, failed ones included.
+func (c *JobController) Spin(ctx context.Context, beat func()) error {
 	host, _ := os.Hostname()
 	slog.Info("Entering main poll loop", "host", host)
 
@@ -253,6 +254,9 @@ func (c *JobController) Spin(ctx context.Context) error {
 				return ctx.Err()
 			}
 			slog.Warn("poll loop iteration failed", "error", err)
+		}
+		if beat != nil {
+			beat()
 		}
 
 		select {

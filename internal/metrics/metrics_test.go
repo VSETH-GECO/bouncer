@@ -124,3 +124,31 @@ func TestSetLeader(t *testing.T) {
 		t.Fatalf("bouncer_leader = %v after SetLeader(false), want 0", v)
 	}
 }
+
+func TestRunSampler_CancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	run := func(beat func()) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			// The failing querier leaves every gauge as it is, so the shared collectors are not disturbed.
+			RunSampler(ctx, failingQuerier{}, beat)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("RunSampler did not return within a second of a cancelled context")
+		}
+	}
+
+	run(nil)
+
+	beats := 0
+	run(func() { beats++ })
+	if beats != 1 {
+		t.Errorf("beats = %d, want exactly 1 (the immediate sample)", beats)
+	}
+}

@@ -119,9 +119,9 @@ func (l *Loader) RegisterRunFlags(fs *pflag.FlagSet) {
 	// Shadows the root --switch-secret on run (keeping its -s shorthand and help text); both feed the same key.
 	fs.StringP("switch-secret", "s", "", "Secret to use when authenticating to switches")
 	l.bind(fs, "switch-secret")
-	fs.Bool("usePrometheus", true, "Whether to enable usePrometheus exporter")
+	fs.Bool("usePrometheus", true, "Whether to serve the Prometheus metrics (/metrics) and run their sampler; the port is bound for the health probes either way")
 	l.bind(fs, "usePrometheus")
-	fs.Int("prometheusPort", 2112, "Which port to bind the prometheus server on")
+	fs.Int("prometheusPort", 2112, "Which port to serve the Prometheus metrics and the health probes (/healthz, /readyz) on")
 	l.bind(fs, "prometheusPort")
 }
 
