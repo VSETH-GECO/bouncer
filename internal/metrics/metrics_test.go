@@ -4,43 +4,20 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"os"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/model"
-	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/table"
 	"github.com/VSETH-GECO/bouncer/internal/freeradius"
 	"github.com/VSETH-GECO/bouncer/internal/mac"
 	"github.com/VSETH-GECO/bouncer/internal/testdb"
+	"github.com/VSETH-GECO/bouncer/internal/testgen"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
-
-var uniqueID atomic.Int64
-
-func seedSession(t *testing.T, q db.Querier, m mac.MAC, switchIP string, stop *time.Time) {
-	t.Helper()
-	start := time.Now().Add(-time.Hour)
-	row := model.Radacct{
-		Acctsessionid:   "sess",
-		Acctuniqueid:    fmt.Sprintf("uniq-%d", uniqueID.Add(1)),
-		Username:        m.Hex(),
-		Nasipaddress:    switchIP,
-		Acctstarttime:   &start,
-		Acctstoptime:    stop,
-		Framedipaddress: "10.20.0.50",
-	}
-	_, err := table.Radacct.INSERT(table.Radacct.MutableColumns).MODEL(row).ExecContext(context.Background(), q)
-	if err != nil {
-		t.Fatalf("seeding session: %v", err)
-	}
-}
 
 // gaugeValue reads a gauge without registering it. It stands in for testutil.ToFloat64, whose import would add
 // github.com/kylelemons/godebug to go.mod.
@@ -79,9 +56,13 @@ func TestSample_DistinctUsers(t *testing.T) {
 		t.Fatal(err)
 	}
 	stop := time.Now()
-	seedSession(t, tx, a, sw, nil)
-	seedSession(t, tx, a, sw, nil)
-	seedSession(t, tx, b, sw, &stop)
+	on := func(m mac.MAC, stop *time.Time) func(*model.Radacct) {
+		return func(r *model.Radacct) { r.Username, r.Nasipaddress, r.Acctstoptime = m.Hex(), sw, stop }
+	}
+	p := testgen.Persistent(t, tx)
+	p.Session(on(a, nil))
+	p.Session(on(a, nil))
+	p.Session(on(b, &stop))
 
 	sample(ctx, tx)
 

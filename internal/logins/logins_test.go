@@ -10,42 +10,34 @@ import (
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/model"
-	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/table"
 	"github.com/VSETH-GECO/bouncer/internal/logins"
 	"github.com/VSETH-GECO/bouncer/internal/mac"
 	"github.com/VSETH-GECO/bouncer/internal/testdb"
+	"github.com/VSETH-GECO/bouncer/internal/testgen"
 )
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
-
-func ptr[T any](v T) *T { return &v }
 
 func begin(t *testing.T) (context.Context, *sql.Tx) {
 	return context.Background(), testdb.Tx(t)
 }
 
-func seedLoginLog(t *testing.T, q db.Querier, username *string, mac *string, updatedAt time.Time) {
-	t.Helper()
-	row := model.LoginLogs{
-		Username:  username,
-		Mac:       mac,
-		UpdatedAt: updatedAt,
-		CreatedAt: updatedAt,
-	}
-	_, err := table.LoginLogs.INSERT(table.LoginLogs.MutableColumns).MODEL(row).ExecContext(context.Background(), q)
-	if err != nil {
-		t.Fatalf("seeding login log: %v", err)
+// login returns a mod that records a login of username from the MAC stored as macHex at the given time.
+func login(username, macHex string, at time.Time) func(*model.LoginLogs) {
+	return func(l *model.LoginLogs) {
+		l.Username, l.Mac, l.CreatedAt, l.UpdatedAt = &username, &macHex, at, at
 	}
 }
 
 func TestFindMAC_ByUsernameNewestWins(t *testing.T) {
 	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
 	m1 := mac.MustParse("00:11:22:33:44:51")
 	m2 := mac.MustParse("00:11:22:33:44:52")
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
-	seedLoginLog(t, q, ptr("alice"), ptr(m1.Hex()), base)
-	seedLoginLog(t, q, ptr("alice"), ptr(m2.Hex()), base.Add(time.Hour))
+	p.LoginLog(login("alice", m1.Hex(), base))
+	p.LoginLog(login("alice", m2.Hex(), base.Add(time.Hour)))
 
 	got, err := logins.FindMAC(ctx, q, "alice")
 	if err != nil {
@@ -71,8 +63,9 @@ func TestFindMAC_MatchesStoredCaseVariants(t *testing.T) {
 
 	t.Run("uppercase_stored", func(t *testing.T) {
 		ctx, q := begin(t)
+		p := testgen.Persistent(t, q)
 		// Seed with uppercase hex form only
-		seedLoginLog(t, q, ptr("user_upper"), ptr("00AABBCCDDEE"), base)
+		p.LoginLog(login("user_upper", "00AABBCCDDEE", base))
 
 		// FindMAC should find it with uppercase hex form
 		got, err := logins.FindMAC(ctx, q, "00AABBCCDDEE")
@@ -86,8 +79,9 @@ func TestFindMAC_MatchesStoredCaseVariants(t *testing.T) {
 
 	t.Run("lowercase_stored", func(t *testing.T) {
 		ctx, q := begin(t)
+		p := testgen.Persistent(t, q)
 		// Seed with lowercase hex form only
-		seedLoginLog(t, q, ptr("user_lower"), ptr("00aabbccddee"), base)
+		p.LoginLog(login("user_lower", "00aabbccddee", base))
 
 		// FindMAC should find it with lowercase hex form
 		got, err := logins.FindMAC(ctx, q, "00aabbccddee")
@@ -101,8 +95,9 @@ func TestFindMAC_MatchesStoredCaseVariants(t *testing.T) {
 
 	t.Run("invalid_mac", func(t *testing.T) {
 		ctx, q := begin(t)
+		p := testgen.Persistent(t, q)
 		// Seed invalid MAC with username "bob"
-		seedLoginLog(t, q, ptr("bob"), ptr("zz"), base)
+		p.LoginLog(login("bob", "zz", base))
 
 		// Should return non-ErrNotFound error for bob
 		_, err := logins.FindMAC(ctx, q, "bob")
@@ -117,11 +112,12 @@ func TestFindMAC_MatchesStoredCaseVariants(t *testing.T) {
 
 func TestLatestUsername(t *testing.T) {
 	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
 	m := mac.MustParse("00:11:22:33:44:53")
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
-	seedLoginLog(t, q, ptr("alice"), ptr(m.Hex()), base)
-	seedLoginLog(t, q, ptr("alice_new"), ptr(m.Hex()), base.Add(time.Hour))
+	p.LoginLog(login("alice", m.Hex(), base))
+	p.LoginLog(login("alice_new", m.Hex(), base.Add(time.Hour)))
 
 	got, err := logins.LatestUsername(ctx, q, m)
 	if err != nil {
@@ -141,11 +137,12 @@ func TestLatestUsername(t *testing.T) {
 
 func TestLatestUsername_MatchesUppercaseStored(t *testing.T) {
 	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
 	m := mac.MustParse("00:aa:bb:cc:dd:ff")
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	// Seed with uppercase hex form of the MAC
-	seedLoginLog(t, q, ptr("user_test"), ptr("00AABBCCDDFF"), base)
+	p.LoginLog(login("user_test", "00AABBCCDDFF", base))
 
 	// Lookup with lowercase hex form should still find it
 	got, err := logins.LatestUsername(ctx, q, m)

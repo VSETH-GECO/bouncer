@@ -12,10 +12,10 @@ import (
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/model"
-	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/table"
 	"github.com/VSETH-GECO/bouncer/internal/kea"
 	"github.com/VSETH-GECO/bouncer/internal/mac"
 	"github.com/VSETH-GECO/bouncer/internal/testdb"
+	"github.com/VSETH-GECO/bouncer/internal/testgen"
 )
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
@@ -26,43 +26,19 @@ func begin(t *testing.T) (context.Context, *sql.Tx) {
 	return context.Background(), testdb.Tx(t)
 }
 
-func seedLease4(t *testing.T, q db.Querier, m mac.MAC, ip net.IP, hostname *string, expire time.Time) {
-	t.Helper()
-	hw := m.Bytes()
-	row := model.Lease4{
-		Address:  binary.BigEndian.Uint32(ip.To4()),
-		Hwaddr:   &hw,
-		Hostname: hostname,
-		Expire:   &expire,
-		SubnetID: ptr(uint32(1)),
-		State:    ptr(uint32(0)),
-		PoolID:   0,
-	}
-	insertLease4(t, q, row)
-}
-
-func insertLease4(t *testing.T, q db.Querier, row model.Lease4) {
-	t.Helper()
-	_, err := table.Lease4.INSERT(table.Lease4.AllColumns).MODEL(row).ExecContext(context.Background(), q)
-	if err != nil {
-		t.Fatalf("seeding lease4: %v", err)
+// lease4 returns a mod that gives an IPv4 lease to m at ip, with the given hostname and expiry.
+func lease4(m mac.MAC, ip string, hostname *string, expire time.Time) func(*model.Lease4) {
+	return func(l *model.Lease4) {
+		hw := m.Bytes()
+		l.Hwaddr, l.Address, l.Hostname, l.Expire = &hw, binary.BigEndian.Uint32(net.ParseIP(ip).To4()), hostname, &expire
 	}
 }
 
-func seedLease6(t *testing.T, q db.Querier, m mac.MAC, ip net.IP) {
-	t.Helper()
-	hw := m.Bytes()
-	row := model.Lease6{
-		Address:   ip.To16(),
-		Hwaddr:    &hw,
-		Expire:    ptr(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)),
-		SubnetID:  ptr(uint32(1)),
-		LeaseType: ptr(int8(0)),
-		State:     ptr(uint32(0)),
-	}
-	_, err := table.Lease6.INSERT(table.Lease6.AllColumns).MODEL(row).ExecContext(context.Background(), q)
-	if err != nil {
-		t.Fatalf("seeding lease6: %v", err)
+// lease6 returns a mod that gives an IPv6 lease to m at ip.
+func lease6(m mac.MAC, ip string) func(*model.Lease6) {
+	return func(l *model.Lease6) {
+		hw := m.Bytes()
+		l.Hwaddr, l.Address = &hw, net.ParseIP(ip).To16()
 	}
 }
 
@@ -85,10 +61,11 @@ func statSum(t *testing.T, q db.Querier, tbl string) int64 {
 
 func TestLatestLease4(t *testing.T) {
 	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
 	m := mac.MustParse("00:11:22:33:44:51")
 	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	seedLease4(t, q, m, net.ParseIP("10.20.0.51"), ptr("old-pc"), t0)
-	seedLease4(t, q, m, net.ParseIP("10.20.0.52"), ptr("test-pc"), t0.Add(time.Hour))
+	p.Lease4(lease4(m, "10.20.0.51", ptr("old-pc"), t0))
+	p.Lease4(lease4(m, "10.20.0.52", ptr("test-pc"), t0.Add(time.Hour)))
 
 	got, err := kea.LatestLease4(ctx, q, m)
 	if err != nil {
@@ -115,8 +92,9 @@ func TestLatestLease4(t *testing.T) {
 
 func TestLatestLease4_NullHostname(t *testing.T) {
 	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
 	m := mac.MustParse("00:11:22:33:44:52")
-	seedLease4(t, q, m, net.ParseIP("10.20.0.53"), nil, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	p.Lease4(lease4(m, "10.20.0.53", nil, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)))
 
 	got, err := kea.LatestLease4(ctx, q, m)
 	if err != nil {
@@ -129,8 +107,9 @@ func TestLatestLease4_NullHostname(t *testing.T) {
 
 func TestLease6Address(t *testing.T) {
 	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
 	m := mac.MustParse("00:11:22:33:44:53")
-	seedLease6(t, q, m, net.ParseIP("fd00::50"))
+	p.Lease6(lease6(m, "fd00::50"))
 
 	got, err := kea.Lease6Address(ctx, q, m)
 	if err != nil {
@@ -148,9 +127,10 @@ func TestLease6Address(t *testing.T) {
 
 func TestDeleteLeases_FiresTriggers(t *testing.T) {
 	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
 	m := mac.MustParse("00:11:22:33:44:54")
-	seedLease4(t, q, m, net.ParseIP("10.20.0.54"), ptr("test-pc"), time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	seedLease6(t, q, m, net.ParseIP("fd00::54"))
+	p.Lease4(lease4(m, "10.20.0.54", ptr("test-pc"), time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)))
+	p.Lease6(lease6(m, "fd00::54"))
 	before4, before6 := statSum(t, q, "lease4_stat"), statSum(t, q, "lease6_stat")
 
 	if err := kea.DeleteLeases(ctx, q, m); err != nil {
@@ -175,9 +155,10 @@ func TestDeleteLeases_FiresTriggers(t *testing.T) {
 
 func TestFindMAC_ByIPv4_ByIPv6_ByMAC_ByHostname(t *testing.T) {
 	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
 	m := mac.MustParse("00:11:22:33:44:55")
-	seedLease4(t, q, m, net.ParseIP("10.20.0.50"), ptr("test-pc"+kea.HostnameSuffix), time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	seedLease6(t, q, m, net.ParseIP("fd00::50"))
+	p.Lease4(lease4(m, "10.20.0.50", ptr("test-pc"+kea.HostnameSuffix), time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)))
+	p.Lease6(lease6(m, "fd00::50"))
 
 	for _, v := range []string{"10.20.0.50", "fd00::50", "00:11:22:33:44:55", "001122334455", "test-pc"} {
 		got, err := kea.FindMAC(ctx, q, v)
@@ -196,13 +177,11 @@ func TestFindMAC_ByIPv4_ByIPv6_ByMAC_ByHostname(t *testing.T) {
 
 func TestFindMAC_BadHwaddrIsError(t *testing.T) {
 	ctx, q := begin(t)
-	insertLease4(t, q, model.Lease4{
-		Address:  binary.BigEndian.Uint32(net.ParseIP("10.20.0.99").To4()),
-		Hostname: ptr("ghost" + kea.HostnameSuffix),
-		Expire:   ptr(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)),
-		SubnetID: ptr(uint32(1)),
-		State:    ptr(uint32(0)),
-	})
+	p := testgen.Persistent(t, q)
+	p.Lease4(
+		lease4(mac.MAC{}, "10.20.0.99", ptr("ghost"+kea.HostnameSuffix), time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)),
+		func(l *model.Lease4) { l.Hwaddr = nil },
+	)
 	_, err := kea.FindMAC(ctx, q, "ghost")
 	if err == nil || errors.Is(err, db.ErrNotFound) {
 		t.Errorf("err = %v, want a non-ErrNotFound error", err)
@@ -211,11 +190,12 @@ func TestFindMAC_BadHwaddrIsError(t *testing.T) {
 
 func TestFindMAC_HostnameWildcardsAreLiteral(t *testing.T) {
 	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
 	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	mA := mac.MustParse("00:11:22:33:44:61")
 	mB := mac.MustParse("00:11:22:33:44:62")
-	seedLease4(t, q, mA, net.ParseIP("10.20.0.61"), ptr("max_pc"+kea.HostnameSuffix), t0)
-	seedLease4(t, q, mB, net.ParseIP("10.20.0.62"), ptr("maxxpc"+kea.HostnameSuffix), t0.Add(time.Hour))
+	p.Lease4(lease4(mA, "10.20.0.61", ptr("max_pc"+kea.HostnameSuffix), t0))
+	p.Lease4(lease4(mB, "10.20.0.62", ptr("maxxpc"+kea.HostnameSuffix), t0.Add(time.Hour)))
 
 	for value, want := range map[string]mac.MAC{"max_pc": mA, "maxxpc": mB} {
 		got, err := kea.FindMAC(ctx, q, value)
@@ -232,8 +212,9 @@ func TestFindMAC_HostnameWildcardsAreLiteral(t *testing.T) {
 
 func TestFindMAC_Lease6Only(t *testing.T) {
 	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
 	mC := mac.MustParse("00:11:22:33:44:63")
-	seedLease6(t, q, mC, net.ParseIP("fd00::63"))
+	p.Lease6(lease6(mC, "fd00::63"))
 
 	got, err := kea.FindMAC(ctx, q, "fd00::63")
 	if err != nil {

@@ -4,10 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"net"
 	"os"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,47 +15,18 @@ import (
 	"github.com/VSETH-GECO/bouncer/internal/freeradius"
 	"github.com/VSETH-GECO/bouncer/internal/mac"
 	"github.com/VSETH-GECO/bouncer/internal/testdb"
+	"github.com/VSETH-GECO/bouncer/internal/testgen"
 	"github.com/go-jet/jet/v2/mysql"
 )
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
 
-var uniqueID atomic.Int64
-
-type sessionOpts struct {
-	start   *time.Time
-	stop    *time.Time
-	switchI string
-	nullish bool // NULL port id and octets, empty client IP
-}
-
-func seedSession(t *testing.T, q db.Querier, m mac.MAC, o sessionOpts) {
-	t.Helper()
-	row := model.Radacct{
-		Acctsessionid:   "sess",
-		Acctuniqueid:    fmt.Sprintf("uniq-%d", uniqueID.Add(1)),
-		Username:        m.Hex(),
-		Nasipaddress:    "10.10.0.1",
-		Acctstarttime:   o.start,
-		Acctstoptime:    o.stop,
-		Framedipaddress: "10.20.0.50",
-	}
-	if o.switchI != "" {
-		row.Nasipaddress = o.switchI
-	}
-	if o.nullish {
-		row.Framedipaddress = ""
-	} else {
-		port, in, out := "GigabitEthernet1/0/5", int64(10), int64(20)
-		row.Nasportid, row.Acctinputoctets, row.Acctoutputoctets = &port, &in, &out
-	}
-	_, err := table.Radacct.INSERT(table.Radacct.MutableColumns).MODEL(row).ExecContext(context.Background(), q)
-	if err != nil {
-		t.Fatalf("seeding session: %v", err)
+// session returns mods that make a session belong to m and run from start until stop (nil: still active).
+func session(m mac.MAC, start, stop *time.Time) func(*model.Radacct) {
+	return func(r *model.Radacct) {
+		r.Username, r.Acctstarttime, r.Acctstoptime = m.Hex(), start, stop
 	}
 }
-
-func tp(t time.Time) *time.Time { return &t }
 
 func begin(t *testing.T) (context.Context, *sql.Tx) {
 	return context.Background(), testdb.Tx(t)
@@ -67,8 +36,14 @@ func TestSessionsForMAC_OrderAndMapping(t *testing.T) {
 	ctx, q := begin(t)
 	m := mac.MustParse("00:11:22:33:44:51")
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	seedSession(t, q, m, sessionOpts{start: tp(base), stop: tp(base.Add(time.Hour))})
-	seedSession(t, q, m, sessionOpts{start: tp(base.Add(2 * time.Hour))})
+	p := testgen.Persistent(t, q)
+	stop, newest := base.Add(time.Hour), base.Add(2*time.Hour)
+	p.Session(session(m, &base, &stop))
+	p.Session(session(m, &newest, nil), func(r *model.Radacct) {
+		port, in, out := "GigabitEthernet1/0/5", int64(10), int64(20)
+		r.Nasipaddress, r.Framedipaddress = "10.10.0.1", "10.20.0.50"
+		r.Nasportid, r.Acctinputoctets, r.Acctoutputoctets = &port, &in, &out
+	})
 
 	got, err := freeradius.SessionsForMAC(ctx, q, m)
 	if err != nil {
@@ -95,7 +70,10 @@ func TestSessionsForMAC_OrderAndMapping(t *testing.T) {
 func TestSessionsForMAC_NullableColumns(t *testing.T) {
 	ctx, q := begin(t)
 	m := mac.MustParse("00:11:22:33:44:52")
-	seedSession(t, q, m, sessionOpts{nullish: true})
+	testgen.Persistent(t, q).Session(session(m, nil, nil), func(r *model.Radacct) {
+		r.Nasportid, r.Acctinputoctets, r.Acctoutputoctets = nil, nil, nil
+		r.Framedipaddress = ""
+	})
 
 	got, err := freeradius.SessionsForMAC(ctx, q, m)
 	if err != nil {
@@ -199,10 +177,12 @@ func TestCounts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	seedSession(t, q, a, sessionOpts{start: tp(now)})
-	seedSession(t, q, a, sessionOpts{start: tp(now)})
-	seedSession(t, q, b, sessionOpts{start: tp(now), stop: tp(now.Add(time.Hour))})
-	seedSession(t, q, c, sessionOpts{start: tp(now), stop: tp(now.Add(time.Hour))})
+	p := testgen.Persistent(t, q)
+	stop := now.Add(time.Hour)
+	p.Session(session(a, &now, nil))
+	p.Session(session(a, &now, nil))
+	p.Session(session(b, &now, &stop))
+	p.Session(session(c, &now, &stop))
 
 	after := takeCounts(t, ctx, q)
 	got := counts{after.known - before.known, after.authorized - before.authorized, after.active - before.active}
@@ -238,15 +218,16 @@ func TestPerVLANAndPerSwitch(t *testing.T) {
 	authBefore, actBefore, swBefore := vlans(freeradius.AuthorizedPerVLAN), vlans(freeradius.ActivePerVLAN), switches()
 
 	a, b := mac.MustParse("00:11:22:33:44:5d"), mac.MustParse("00:11:22:33:44:5e")
-	now := tp(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	if err := freeradius.Authorize(ctx, q, a, 42); err != nil {
 		t.Fatal(err)
 	}
 	if err := freeradius.Authorize(ctx, q, b, 7); err != nil {
 		t.Fatal(err)
 	}
-	seedSession(t, q, a, sessionOpts{start: now, switchI: "10.10.0.1"})
-	seedSession(t, q, b, sessionOpts{start: now, switchI: "10.10.0.2"})
+	p := testgen.Persistent(t, q)
+	p.Session(session(a, &now, nil), func(r *model.Radacct) { r.Nasipaddress = "10.10.0.1" })
+	p.Session(session(b, &now, nil), func(r *model.Radacct) { r.Nasipaddress = "10.10.0.2" })
 
 	authAfter, actAfter, swAfter := vlans(freeradius.AuthorizedPerVLAN), vlans(freeradius.ActivePerVLAN), switches()
 	for _, v := range []int{42, 7} {

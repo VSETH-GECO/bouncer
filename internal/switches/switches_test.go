@@ -10,10 +10,9 @@ import (
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/model"
-	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/table"
 	"github.com/VSETH-GECO/bouncer/internal/switches"
 	"github.com/VSETH-GECO/bouncer/internal/testdb"
-	"github.com/go-jet/jet/v2/mysql"
+	"github.com/VSETH-GECO/bouncer/internal/testgen"
 )
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
@@ -22,44 +21,33 @@ func begin(t *testing.T) (context.Context, *sql.Tx) {
 	return context.Background(), testdb.Tx(t)
 }
 
-func exec(t *testing.T, q db.Querier, what string, stmt mysql.Statement) {
-	t.Helper()
-	if _, err := stmt.ExecContext(context.Background(), q); err != nil {
-		t.Fatalf("seeding %s: %v", what, err)
+// ips returns switch IP rows for the given addresses.
+func ips(addrs ...string) []model.BouncerSwitchIP {
+	rows := make([]model.BouncerSwitchIP, len(addrs))
+	for i, a := range addrs {
+		rows[i].IP = a
 	}
-}
-
-func seedSwitch(t *testing.T, q db.Querier, id, primaryVlan int32, host string, loc *string, ips ...string) {
-	t.Helper()
-	exec(t, q, "switch map", table.BouncerSwitchMap.INSERT(table.BouncerSwitchMap.AllColumns).
-		MODEL(model.BouncerSwitchMap{ID: id, PrimaryVlan: primaryVlan, Hostname: host, Location: loc}))
-	for i, ip := range ips {
-		exec(t, q, "switch ip", table.BouncerSwitchIP.INSERT(table.BouncerSwitchIP.AllColumns).
-			MODEL(model.BouncerSwitchIP{ID: id*10 + int32(i), SwitchID: id, IP: ip}))
-	}
-}
-
-func seedVlan(t *testing.T, q db.Querier, id, vlanID int32, ipRange string, switchID int32) {
-	t.Helper()
-	exec(t, q, "vlan", table.BouncerVlan.INSERT(table.BouncerVlan.AllColumns).
-		MODEL(model.BouncerVlan{ID: id, Name: "vlan-test", Description: "desc-test", VlanID: vlanID, IPRange: ipRange}))
-	exec(t, q, "vlan switch", table.BouncerVlanSwitch.INSERT(table.BouncerVlanSwitch.AllColumns).
-		MODEL(model.BouncerVlanSwitch{ID: id, EventVlanID: id, SwitchID: switchID}))
+	return rows
 }
 
 func TestByIP_FullSwitch(t *testing.T) {
 	ctx, q := begin(t)
 	loc := "room-1"
-	seedSwitch(t, q, 101, 101, "sw-test-1", &loc, "10.10.0.1", "10.10.0.2")
-	seedVlan(t, q, 101, 101, "10.201.0.0/16", 101)
-	seedVlan(t, q, 102, 102, "10.202.0.0/16", 101)
+	sw := testgen.Persistent(t, q).Switch(func(s *testgen.Switch) {
+		s.Map.PrimaryVlan, s.Map.Hostname, s.Map.Location = 101, "sw-test-1", &loc
+		s.IPs = ips("10.10.0.1", "10.10.0.2")
+		s.VLANs = []model.BouncerVlan{
+			{Name: "vlan-test", Description: "desc-test", VlanID: 101, IPRange: "10.201.0.0/16"},
+			{Name: "vlan-test", Description: "desc-test", VlanID: 102, IPRange: "10.202.0.0/16"},
+		}
+	})
 
 	for _, ip := range []string{"10.10.0.1", "10.10.0.2"} {
 		got, err := switches.ByIP(ctx, q, net.ParseIP(ip))
 		if err != nil {
 			t.Fatalf("ByIP(%s): %v", ip, err)
 		}
-		if got.ID != 101 || got.Hostname != "sw-test-1" {
+		if got.ID != int(sw.Map.ID) || got.Hostname != "sw-test-1" {
 			t.Errorf("ID/Hostname = %d/%q", got.ID, got.Hostname)
 		}
 		if got.Location == nil || *got.Location != "room-1" {
@@ -91,7 +79,10 @@ func TestByIP_FullSwitch(t *testing.T) {
 
 func TestByIP_SwitchWithoutVLANs(t *testing.T) {
 	ctx, q := begin(t)
-	seedSwitch(t, q, 111, 111, "sw-test-2", nil, "10.10.0.11")
+	testgen.Persistent(t, q).Switch(func(s *testgen.Switch) {
+		s.Map.PrimaryVlan, s.Map.Hostname, s.Map.Location = 111, "sw-test-2", nil
+		s.IPs, s.VLANs = ips("10.10.0.11"), nil
+	})
 
 	got, err := switches.ByIP(ctx, q, net.ParseIP("10.10.0.11"))
 	if err != nil {
@@ -110,8 +101,11 @@ func TestByIP_SwitchWithoutVLANs(t *testing.T) {
 
 func TestByIP_PrimaryVLANNotMapped(t *testing.T) {
 	ctx, q := begin(t)
-	seedSwitch(t, q, 121, 199, "sw-test-3", nil, "10.10.0.21")
-	seedVlan(t, q, 121, 121, "10.203.0.0/16", 121)
+	testgen.Persistent(t, q).Switch(func(s *testgen.Switch) {
+		s.Map.PrimaryVlan, s.Map.Hostname, s.Map.Location = 199, "sw-test-3", nil
+		s.IPs = ips("10.10.0.21")
+		s.VLANs = []model.BouncerVlan{{Name: "vlan-test", Description: "desc-test", VlanID: 121, IPRange: "10.203.0.0/16"}}
+	})
 
 	got, err := switches.ByIP(ctx, q, net.ParseIP("10.10.0.21"))
 	if err != nil {
@@ -143,8 +137,11 @@ func TestByIP_NilIP(t *testing.T) {
 
 func TestByIP_BadIPRangeIsError(t *testing.T) {
 	ctx, q := begin(t)
-	seedSwitch(t, q, 131, 131, "sw-test-4", nil, "10.10.0.31")
-	seedVlan(t, q, 131, 131, "nonsense", 131)
+	testgen.Persistent(t, q).Switch(func(s *testgen.Switch) {
+		s.Map.PrimaryVlan, s.Map.Hostname, s.Map.Location = 131, "sw-test-4", nil
+		s.IPs = ips("10.10.0.31")
+		s.VLANs = []model.BouncerVlan{{Name: "vlan-test", Description: "desc-test", VlanID: 131, IPRange: "nonsense"}}
+	})
 
 	_, err := switches.ByIP(ctx, q, net.ParseIP("10.10.0.31"))
 	if err == nil || errors.Is(err, db.ErrNotFound) {
