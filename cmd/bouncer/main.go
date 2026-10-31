@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"k8s.io/klog/v2"
 )
 
 // levelVar is the minimum level of the default logger; the root command raises it to Debug with --verbose.
@@ -15,6 +17,8 @@ var levelVar slog.LevelVar
 func main() {
 	levelVar.Set(slog.LevelInfo)
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: &levelVar})))
+	// client-go (the leader election) logs through klog; route it into the same logger so every line has one format
+	klog.SetSlogLogger(slog.Default())
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	go func() {
