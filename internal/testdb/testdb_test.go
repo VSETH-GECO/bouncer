@@ -2,6 +2,8 @@ package testdb_test
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -118,5 +120,109 @@ func TestSharedTxRollsBack(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("row survived the rollback: count = %d", n)
+	}
+}
+
+// logCount counts the bouncer_log rows of clientMAC inside tx.
+func logCount(t *testing.T, tx *sql.Tx, clientMAC string) int {
+	t.Helper()
+	var n int
+	if err := tx.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM bouncer_log WHERE clientMAC = ?", clientMAC).Scan(&n); err != nil {
+		t.Fatalf("counting bouncer_log rows of %s: %v", clientMAC, err)
+	}
+	return n
+}
+
+// insertLog inserts a bouncer_log row for clientMAC through q.
+func insertLog(q db.Querier, clientMAC string) error {
+	_, err := q.ExecContext(context.Background(), "INSERT INTO bouncer_log(clientMAC, oldVLAN, newVLAN) VALUES (?, 10, 20)", clientMAC)
+	return err
+}
+
+func TestTxStore_SuccessKeepsRows(t *testing.T) {
+	s := testdb.Store(t)
+	const mac = "020000000201"
+	if err := s.WithTx(context.Background(), func(tx db.Querier) error { return insertLog(tx, mac) }); err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+	if n := logCount(t, s.Tx(), mac); n != 1 {
+		t.Fatalf("rows after WithTx = %d, want 1", n)
+	}
+}
+
+func TestTxStore_ErrorRollsBackToSavepoint(t *testing.T) {
+	s := testdb.Store(t)
+	const before, inside, after = "020000000202", "020000000203", "020000000204"
+	if err := insertLog(s.Tx(), before); err != nil {
+		t.Fatalf("inserting before WithTx: %v", err)
+	}
+
+	boom := errors.New("boom")
+	err := s.WithTx(context.Background(), func(tx db.Querier) error {
+		if err := insertLog(tx, inside); err != nil {
+			return err
+		}
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("WithTx error = %v, want boom", err)
+	}
+	if n := logCount(t, s.Tx(), before); n != 1 {
+		t.Errorf("rows inserted before WithTx = %d, want 1", n)
+	}
+	if n := logCount(t, s.Tx(), inside); n != 0 {
+		t.Errorf("rows inserted inside the failed WithTx = %d, want 0", n)
+	}
+
+	// The transaction survives the rolled-back savepoint.
+	if err := insertLog(s.Tx(), after); err != nil {
+		t.Fatalf("inserting after the rollback: %v", err)
+	}
+	if n := logCount(t, s.Tx(), after); n != 1 {
+		t.Errorf("rows inserted after the rollback = %d, want 1", n)
+	}
+}
+
+func TestTxStore_PanicRollsBackAndRepanics(t *testing.T) {
+	s := testdb.Store(t)
+	const mac = "020000000205"
+
+	var txErr error
+	recovered := func() (r any) {
+		defer func() { r = recover() }()
+		txErr = s.WithTx(context.Background(), func(tx db.Querier) error {
+			if err := insertLog(tx, mac); err != nil {
+				return err
+			}
+			panic("boom")
+		})
+		return nil
+	}()
+	if txErr != nil {
+		t.Fatalf("WithTx: %v", txErr)
+	}
+	if recovered != "boom" {
+		t.Fatalf("recovered = %v, want boom", recovered)
+	}
+	if n := logCount(t, s.Tx(), mac); n != 0 {
+		t.Errorf("rows after panic = %d, want 0", n)
+	}
+}
+
+func TestTxStore_CancelledContext(t *testing.T) {
+	s := testdb.Store(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	called := false
+	err := s.WithTx(ctx, func(db.Querier) error { called = true; return nil })
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("WithTx error = %v, want it to wrap context.Canceled", err)
+	}
+	if called {
+		t.Error("fn was called with a cancelled context")
+	}
+	if err := insertLog(s.Tx(), "020000000206"); err != nil {
+		t.Errorf("transaction unusable after a cancelled WithTx: %v", err)
 	}
 }

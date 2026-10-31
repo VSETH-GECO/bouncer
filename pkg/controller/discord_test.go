@@ -12,23 +12,13 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-// testSwitch inserts a switch with event VLANs 10 (primary) and 20 and one management IP, and registers a cleanup
-// deleting it again.
+// testSwitch inserts a switch with event VLANs 10 (primary) and 20 and one management IP.
 func (h *harness) testSwitch() testgen.Switch {
 	h.t.Helper()
-	sw := h.p.Switch(func(s *testgen.Switch) {
+	return h.p.Switch(func(s *testgen.Switch) {
 		s.VLANs = []model.BouncerVlan{{VlanID: 10}, {VlanID: 20}}
 		s.Map.PrimaryVlan = 10
 	})
-	h.t.Cleanup(func() {
-		h.exec("DELETE FROM bouncer_vlan_switch WHERE switch_id = ?", sw.Map.ID)
-		h.exec("DELETE FROM bouncer_switch_ip WHERE switch_id = ?", sw.Map.ID)
-		h.exec("DELETE FROM bouncer_switch_map WHERE id = ?", sw.Map.ID)
-		for _, v := range sw.VLANs {
-			h.exec("DELETE FROM bouncer_vlan WHERE id = ?", v.ID)
-		}
-	})
-	return sw
 }
 
 // login inserts a login log entry of m with the given username.
@@ -45,7 +35,7 @@ func onSwitch(ip, port string) func(*model.Radacct) {
 // card fetches the user card for search and fails the test on error.
 func (h *harness) card(search string, longCard bool) *UserCard {
 	h.t.Helper()
-	c, err := NewDiscordController(h.d).GetDiscordUserCard(h.ctx, search, true, longCard)
+	c, err := h.dc.GetDiscordUserCard(h.ctx, search, true, longCard)
 	if err != nil {
 		h.t.Fatalf("GetDiscordUserCard(%q): %v", search, err)
 	}
@@ -280,7 +270,7 @@ func TestUserCard_EmailUsername(t *testing.T) {
 			}
 		}
 	}
-	u, err := loadUser(h.ctx, h.d.Querier(), m)
+	u, err := loadUser(h.ctx, h.tx, m)
 	if err != nil {
 		t.Fatalf("loadUser: %v", err)
 	}
@@ -291,7 +281,7 @@ func TestUserCard_EmailUsername(t *testing.T) {
 
 func TestChangeUserVLAN(t *testing.T) {
 	h := newHarness(t)
-	dc := NewDiscordController(h.d)
+	dc := h.dc
 	m, m2 := h.client(), h.client()
 
 	if err := dc.ChangeUserVLAN(h.ctx, m, 20); err != nil {

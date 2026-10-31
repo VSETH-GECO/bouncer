@@ -48,14 +48,14 @@ type CoASender interface {
 }
 
 type JobController struct {
-	db           *db.DB
+	db           Store
 	switchSecret string
 	coa          CoASender
 }
 
 // NewJobController returns a controller that processes the job queue in d, sending CoA requests signed with
 // switchSecret through coa.
-func NewJobController(d *db.DB, switchSecret string, coa CoASender) *JobController {
+func NewJobController(d Store, switchSecret string, coa CoASender) *JobController {
 	return &JobController{
 		db:           d,
 		switchSecret: switchSecret,

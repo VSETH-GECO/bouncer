@@ -19,7 +19,7 @@ import (
 )
 
 type DiscordController struct {
-	db *db.DB
+	db Store
 }
 
 type UserCard struct {
@@ -29,7 +29,7 @@ type UserCard struct {
 	RealMAC    string
 }
 
-func NewDiscordController(d *db.DB) *DiscordController {
+func NewDiscordController(d Store) *DiscordController {
 	return &DiscordController{
 		db: d,
 	}

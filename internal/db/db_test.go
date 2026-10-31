@@ -85,26 +85,27 @@ func TestOpen_BadPassword(t *testing.T) {
 	}
 }
 
-// jobRows counts the bouncer_jobs rows for mac and deletes them when the test ends.
-func jobRows(t *testing.T, d *db.DB, mac string) func() int {
+// logRows counts the bouncer_log rows for mac and deletes them when the test ends. The probe rows live in bouncer_log
+// rather than bouncer_jobs so that a committed probe can never be picked up by another package's work loop.
+func logRows(t *testing.T, d *db.DB, mac string) func() int {
 	t.Helper()
 	t.Cleanup(func() {
-		_, _ = d.SQL().ExecContext(context.Background(), "DELETE FROM bouncer_jobs WHERE clientMAC = ?", mac)
+		_, _ = d.SQL().ExecContext(context.Background(), "DELETE FROM bouncer_log WHERE clientMAC = ?", mac)
 	})
 	return func() int {
 		t.Helper()
 		var n int
-		if err := d.SQL().QueryRowContext(context.Background(), "SELECT COUNT(*) FROM bouncer_jobs WHERE clientMAC = ?", mac).Scan(&n); err != nil {
+		if err := d.SQL().QueryRowContext(context.Background(), "SELECT COUNT(*) FROM bouncer_log WHERE clientMAC = ?", mac).Scan(&n); err != nil {
 			t.Fatalf("counting rows: %v", err)
 		}
 		return n
 	}
 }
 
-// insertJob inserts a bouncer_jobs row for mac through q.
-func insertJob(ctx context.Context, q db.Querier, mac string) error {
-	_, err := table.BouncerJobs.INSERT(table.BouncerJobs.ClientMAC, table.BouncerJobs.TargetVLAN).
-		VALUES(mac, 42).ExecContext(ctx, q)
+// insertLog inserts a bouncer_log row for mac through q.
+func insertLog(ctx context.Context, q db.Querier, mac string) error {
+	_, err := table.BouncerLog.INSERT(table.BouncerLog.ClientMAC, table.BouncerLog.OldVLAN, table.BouncerLog.NewVLAN).
+		VALUES(mac, 10, 42).ExecContext(ctx, q)
 	return err
 }
 
@@ -112,8 +113,8 @@ func TestWithTx(t *testing.T) {
 	d := testdb.Shared(t)
 	ctx := context.Background()
 	const mac = "020000000101"
-	count := jobRows(t, d, mac)
-	insert := func(tx db.Querier) error { return insertJob(ctx, tx, mac) }
+	count := logRows(t, d, mac)
+	insert := func(tx db.Querier) error { return insertLog(ctx, tx, mac) }
 
 	boom := errors.New("boom")
 	err := d.WithTx(ctx, func(tx db.Querier) error {
@@ -141,13 +142,13 @@ func TestWithTx_PanicRollsBack(t *testing.T) {
 	d := testdb.Shared(t)
 	ctx := context.Background()
 	const mac = "020000000102"
-	count := jobRows(t, d, mac)
+	count := logRows(t, d, mac)
 
 	var txErr error
 	recovered := func() (r any) {
 		defer func() { r = recover() }()
 		txErr = d.WithTx(ctx, func(tx db.Querier) error {
-			if err := insertJob(ctx, tx, mac); err != nil {
+			if err := insertLog(ctx, tx, mac); err != nil {
 				return err
 			}
 			panic("boom")

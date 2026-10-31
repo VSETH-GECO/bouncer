@@ -32,7 +32,7 @@ func (h *harness) pendingJob(m mac.MAC) *jobs.Job {
 // pendingRaw returns the pending job whose stored clientMAC is raw, or nil if there is none.
 func (h *harness) pendingRaw(raw string) *jobs.Job {
 	h.t.Helper()
-	pending, err := jobs.Pending(h.ctx, h.d.Querier())
+	pending, err := jobs.Pending(h.ctx, h.tx)
 	if err != nil {
 		h.t.Fatalf("Pending: %v", err)
 	}
@@ -61,7 +61,7 @@ func (h *harness) mustPending(m mac.MAC) *jobs.Job {
 // queue creates a job moving m to vlan and returns it as Pending reports it.
 func (h *harness) queue(m mac.MAC, vlan int) *jobs.Job {
 	h.t.Helper()
-	if err := jobs.Create(h.ctx, h.d.Querier(), m, vlan); err != nil {
+	if err := jobs.Create(h.ctx, h.tx, m, vlan); err != nil {
 		h.t.Fatalf("Create: %v", err)
 	}
 	return h.mustPending(m)
@@ -70,7 +70,7 @@ func (h *harness) queue(m mac.MAC, vlan int) *jobs.Job {
 // vlan returns the VLAN assigned to m, or -1 if m is not authorized.
 func (h *harness) vlan(m mac.MAC) int {
 	h.t.Helper()
-	v, err := freeradius.AssignedVLAN(h.ctx, h.d.Querier(), m)
+	v, err := freeradius.AssignedVLAN(h.ctx, h.tx, m)
 	if errors.Is(err, db.ErrNotFound) {
 		return -1
 	}
@@ -88,7 +88,7 @@ func (h *harness) logRows(m mac.MAC) []model.BouncerLog {
 		FROM(table.BouncerLog).
 		WHERE(table.BouncerLog.ClientMAC.EQ(mysql.String(m.Hex()))).
 		ORDER_BY(table.BouncerLog.ID.ASC()).
-		QueryContext(h.ctx, h.d.Querier(), &rows)
+		QueryContext(h.ctx, h.tx, &rows)
 	if err != nil {
 		h.t.Fatalf("querying bouncer_log: %v", err)
 	}
@@ -120,7 +120,7 @@ func (h *harness) lease6(m mac.MAC, mods ...func(*model.Lease6)) model.Lease6 {
 
 func (h *harness) hasLease4(m mac.MAC) bool {
 	h.t.Helper()
-	_, err := kea.LatestLease4(h.ctx, h.d.Querier(), m)
+	_, err := kea.LatestLease4(h.ctx, h.tx, m)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
 		h.t.Fatalf("LatestLease4: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestProcess_NewClientWithoutSession(t *testing.T) {
 		t.Errorf("AssignedVLAN = %d, want 20", v)
 	}
 	var n int
-	if err := h.d.SQL().QueryRowContext(h.ctx, "SELECT COUNT(*) FROM radcheck WHERE username = ?", m.Hex()).Scan(&n); err != nil {
+	if err := h.tx.QueryRowContext(h.ctx, "SELECT COUNT(*) FROM radcheck WHERE username = ?", m.Hex()).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 {
@@ -213,10 +213,10 @@ func TestProcess_KnownClientWithSessionAndLeases(t *testing.T) {
 	if string(req.SwitchSecret) != "secret" {
 		t.Errorf("SwitchSecret = %q, want %q", req.SwitchSecret, "secret")
 	}
-	if _, err := kea.LatestLease4(h.ctx, h.d.Querier(), m); !errors.Is(err, db.ErrNotFound) {
+	if _, err := kea.LatestLease4(h.ctx, h.tx, m); !errors.Is(err, db.ErrNotFound) {
 		t.Errorf("LatestLease4 after move: err = %v, want ErrNotFound", err)
 	}
-	if _, err := kea.Lease6Address(h.ctx, h.d.Querier(), m); !errors.Is(err, db.ErrNotFound) {
+	if _, err := kea.Lease6Address(h.ctx, h.tx, m); !errors.Is(err, db.ErrNotFound) {
 		t.Errorf("Lease6Address after move: err = %v, want ErrNotFound", err)
 	}
 	rows := h.logRows(m)
@@ -352,7 +352,6 @@ func TestProcess_KnownClientWithoutSession(t *testing.T) {
 func TestWork_MalformedMACRetires(t *testing.T) {
 	h := newHarness(t)
 	const bad = "not-a-mac"
-	t.Cleanup(func() { h.cleanupJobs(bad) })
 	h.p.Job(func(j *model.BouncerJobs) { j.ClientMAC, j.TargetVLAN = bad, 20 })
 	m := h.client()
 	h.queue(m, 20)
