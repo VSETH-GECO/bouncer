@@ -4,8 +4,11 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"reflect"
+	"strings"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
@@ -152,8 +155,21 @@ func (l *Loader) Load() (Config, error) {
 	}
 
 	var cfg Config
-	if err := l.v.Unmarshal(&cfg); err != nil {
+	hooks := mapstructure.ComposeDecodeHookFunc(mapstructure.StringToTimeDurationHookFunc(), stringToFields())
+	if err := l.v.Unmarshal(&cfg, viper.DecodeHook(hooks)); err != nil {
 		return Config{}, fmt.Errorf("decoding configuration: %w", err)
 	}
 	return cfg, nil
+}
+
+// stringToFields decodes a string into a []string by splitting it on whitespace, the way viper's slice getter
+// (cast.ToStringSlice) did before Load used Unmarshal. The deployment passes the Discord user list as one
+// space-separated environment variable, and Unmarshal alone would split on commas only.
+func stringToFields() mapstructure.DecodeHookFunc {
+	return func(from, to reflect.Type, data any) (any, error) {
+		if from.Kind() != reflect.String || to != reflect.TypeOf([]string(nil)) {
+			return data, nil
+		}
+		return strings.Fields(data.(string)), nil
+	}
 }

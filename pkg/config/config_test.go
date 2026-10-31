@@ -175,3 +175,12 @@ func TestForceFlag(t *testing.T) {
 	cfg := load(t, []string{missingConfig(t)}, nil, []string{"-f", "7"})
 	equal(t, "force", cfg.Migrate.Force, 7)
 }
+
+// The deployment hands the Discord user list over as one space-separated environment variable (see the k8s chart's
+// ConfigMap), which the old viper slice getter split on whitespace; Unmarshal must do the same.
+func TestUsersFromEnvironmentSplitOnWhitespace(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("DUSERS", "111 222  333")
+	cfg := load(t, []string{missingConfig(t)}, nil, nil)
+	equal(t, "dusers", cfg.Discord.Users, []string{"111", "222", "333"})
+}
