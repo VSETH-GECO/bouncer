@@ -356,7 +356,7 @@ func TestWork_MalformedMACRetires(t *testing.T) {
 	m := h.client()
 	h.queue(m, 20)
 
-	if err := h.c.work(h.ctx); err != nil {
+	if err := h.c.Work(h.ctx); err != nil {
 		t.Fatalf("work: %v", err)
 	}
 	j := h.pendingRaw(bad)
@@ -374,7 +374,7 @@ func TestWork_MalformedMACRetires(t *testing.T) {
 	}
 
 	for range 2 {
-		if err := h.c.work(h.ctx); err != nil {
+		if err := h.c.Work(h.ctx); err != nil {
 			t.Fatalf("work: %v", err)
 		}
 	}
@@ -392,7 +392,7 @@ func TestWork_FailedJobBumpsRetries(t *testing.T) {
 	h.p.Job(func(j *model.BouncerJobs) { j.ClientMAC, j.TargetVLAN, j.LastUpdate = m.Hex(), 20, old })
 	h.coa.fail = func(radius.CoARequest) error { return errors.New("nack") }
 
-	if err := h.c.work(h.ctx); err != nil {
+	if err := h.c.Work(h.ctx); err != nil {
 		t.Fatalf("work: %v", err)
 	}
 	j := h.mustPending(m)
@@ -420,7 +420,7 @@ func TestWork_CancelDuringCoADoesNotCountAsFailure(t *testing.T) {
 		return ctx.Err()
 	}
 
-	err := h.c.work(ctx)
+	err := h.c.Work(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("work: err = %v, want context.Canceled", err)
 	}
@@ -447,7 +447,7 @@ func TestWork_ContinuesAfterFailure(t *testing.T) {
 		return nil
 	}
 
-	if err := h.c.work(h.ctx); err != nil {
+	if err := h.c.Work(h.ctx); err != nil {
 		t.Fatalf("work: %v", err)
 	}
 	if j := h.mustPending(a); j.Retries != 1 {
@@ -464,43 +464,34 @@ func TestWork_ContinuesAfterFailure(t *testing.T) {
 	}
 }
 
-func TestSpin_ReturnsOnCancelledContext(t *testing.T) {
+func TestWork_PanickingJobBumpsRetries(t *testing.T) {
 	h := newHarness(t)
-	ctx, cancel := context.WithCancel(h.ctx)
-	cancel()
-
-	done := make(chan error, 1)
-	go func() { done <- h.c.Spin(ctx, nil) }()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("Spin: err = %v, want context.Canceled", err)
+	a := h.client()
+	h.p.Authorized(a, 10)
+	sa := h.session(a)
+	h.queue(a, 20)
+	b := h.client()
+	h.queue(b, 30)
+	h.coa.fail = func(req radius.CoARequest) error {
+		if req.SessionUID == sa.Acctsessionid {
+			panic("boom")
 		}
-	case <-time.After(time.Second):
-		t.Fatal("Spin did not return within a second of a cancelled context")
+		return nil
 	}
-}
 
-func TestSpin_BeatsOncePerRound(t *testing.T) {
-	h := newHarness(t)
-	ctx, cancel := context.WithCancel(h.ctx)
-	defer cancel()
-
-	beats := 0
-	done := make(chan error, 1)
-	go func() {
-		// Cancel at the first beat: the loop then returns before its next round, 5 s away.
-		done <- h.c.Spin(ctx, func() { beats++; cancel() })
-	}()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("Spin: err = %v, want context.Canceled", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Spin did not return within 3 s of its first beat being cancelled")
+	if err := h.c.Work(h.ctx); err != nil {
+		t.Fatalf("Work: %v", err)
 	}
-	if beats != 1 {
-		t.Errorf("beats = %d, want 1", beats)
+	if j := h.mustPending(a); j.Retries != 1 {
+		t.Errorf("job A Retries = %d, want 1", j.Retries)
+	}
+	if v := h.vlan(a); v != 10 {
+		t.Errorf("A AssignedVLAN = %d, want 10 (rolled back)", v)
+	}
+	if j := h.pendingJob(b); j != nil {
+		t.Errorf("job B still pending: %+v", j)
+	}
+	if v := h.vlan(b); v != 30 {
+		t.Errorf("B AssignedVLAN = %d, want 30", v)
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
+	"runtime/debug"
 	"time"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
@@ -193,9 +193,9 @@ func (c *JobController) ProcessMoveVLANJob(ctx context.Context, job *jobs.Job) e
 	return nil
 }
 
-// work processes the work queue once. Only a failure to fetch the queue is returned; failing jobs are logged, their
-// retry counter is bumped and the remaining jobs are still processed.
-func (c *JobController) work(ctx context.Context) error {
+// Work processes the work queue once; it is the job loop's round. Only a failure to fetch the queue is returned:
+// a job that fails or panics is logged, its retry counter is bumped and the remaining jobs are still processed.
+func (c *JobController) Work(ctx context.Context) error {
 	pending, err := jobs.Pending(ctx, c.db.Querier())
 	if err != nil {
 		return fmt.Errorf("fetching pending jobs: %w", err)
@@ -221,7 +221,7 @@ func (c *JobController) work(ctx context.Context) error {
 			continue
 		}
 
-		err := c.ProcessMoveVLANJob(ctx, job)
+		err := c.processJob(ctx, job)
 		if err == nil {
 			continue
 		}
@@ -240,29 +240,14 @@ func (c *JobController) work(ctx context.Context) error {
 	return nil
 }
 
-// Spin loops over the work queue until ctx is cancelled, then returns ctx.Err(). It calls beat (if not nil) after every
-// round, failed ones included.
-func (c *JobController) Spin(ctx context.Context, beat func()) error {
-	host, _ := os.Hostname()
-	slog.Info("Entering main poll loop", "host", host)
-
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		if err := c.work(ctx); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			slog.Warn("poll loop iteration failed", "error", err)
+// processJob runs ProcessMoveVLANJob and turns a panic into an error, after logging it with its stack.
+func (c *JobController) processJob(ctx context.Context, job *jobs.Job) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			slog.Error("Processing job panicked", "id", job.ID, "clientMAC", job.RawMAC, "panic", p,
+				"stack", string(debug.Stack()))
+			err = fmt.Errorf("panic: %v", p)
 		}
-		if beat != nil {
-			beat()
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
+	}()
+	return c.ProcessMoveVLANJob(ctx, job)
 }
