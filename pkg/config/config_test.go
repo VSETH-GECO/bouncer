@@ -13,7 +13,7 @@ import (
 // that the developer's environment (USER, for instance) does not leak in; viper ignores empty variables.
 var envKeys = []string{
 	"VERBOSE", "DATABASE", "HOST", "USER", "PASSWORD", "PORT", "DTOKEN", "DUSERS", "DLOGCHAN", "DPRIVATECHAN",
-	"DGUILD", "CONFIG", "SWITCH-SECRET", "LEADER-ELECT", "USEPROMETHEUS", "PROMETHEUSPORT", "FORCE",
+	"DGUILD", "CONFIG", "SWITCH-SECRET", "LEADER-ELECT", "USEPROMETHEUS", "PROMETHEUSPORT", "FORCE", "RECONCILE-DRY-RUN",
 }
 
 func clearEnv(t *testing.T) {
@@ -93,7 +93,7 @@ func TestDefaults(t *testing.T) {
 	equal(t, "host", cfg.DB.Host, "")
 	equal(t, "dusers", len(cfg.Discord.Users), 0)
 	equal(t, "switch-secret", cfg.SwitchCOASecret, "")
-	equal(t, "run", cfg.Run, Run{LeaderElect: true, Prometheus: true, PrometheusPort: 2112})
+	equal(t, "run", cfg.Run, Run{LeaderElect: true, Prometheus: true, PrometheusPort: 2112, ReconcileDryRun: true})
 	equal(t, "force", cfg.Migrate.Force, 0)
 }
 
@@ -183,4 +183,20 @@ func TestUsersFromEnvironmentSplitOnWhitespace(t *testing.T) {
 	t.Setenv("DUSERS", "111 222  333")
 	cfg := load(t, []string{missingConfig(t)}, nil, nil)
 	equal(t, "dusers", cfg.Discord.Users, []string{"111", "222", "333"})
+}
+
+func TestReconcileDryRunFlag(t *testing.T) {
+	clearEnv(t)
+	cfg := load(t, []string{missingConfig(t)}, nil, nil)
+	equal(t, "reconcile-dry-run default", cfg.Run.ReconcileDryRun, true)
+
+	cfg = load(t, []string{missingConfig(t)}, []string{"--reconcile-dry-run=false"}, nil)
+	equal(t, "reconcile-dry-run from the flag", cfg.Run.ReconcileDryRun, false)
+
+	path := filepath.Join(t.TempDir(), "bouncer.yml")
+	if err := os.WriteFile(path, []byte("reconcile-dry-run: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg = load(t, []string{"--config", path}, nil, nil)
+	equal(t, "reconcile-dry-run from the config file", cfg.Run.ReconcileDryRun, false)
 }

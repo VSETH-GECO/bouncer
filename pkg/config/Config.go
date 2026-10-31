@@ -54,6 +54,8 @@ type Run struct {
 	LeaderElect    bool `mapstructure:"leader-elect"`
 	Prometheus     bool `mapstructure:"usePrometheus"`
 	PrometheusPort int  `mapstructure:"prometheusPort"`
+	// ReconcileDryRun makes the reconciliation loop only log the stuck clients instead of queueing their jobs.
+	ReconcileDryRun bool `mapstructure:"reconcile-dry-run"`
 }
 
 // Migrate holds the settings of the migrate command.
@@ -123,6 +125,8 @@ func (l *Loader) RegisterRunFlags(fs *pflag.FlagSet) {
 	l.bind(fs, "usePrometheus")
 	fs.Int("prometheusPort", 2112, "Which port to serve the Prometheus metrics and the health probes (/healthz, /readyz) on")
 	l.bind(fs, "prometheusPort")
+	fs.Bool("reconcile-dry-run", true, "Only log the clients the reconciliation loop would bounce to the login VLAN; pass --reconcile-dry-run=false to queue the jobs")
+	l.bind(fs, "reconcile-dry-run")
 }
 
 // RegisterMigrateFlags registers the migrate command's flags on fs.
