@@ -49,7 +49,20 @@ func convertData(data *int64) string {
 	return fmt.Sprint(*data)
 }
 
-func (dc *DiscordController) GetDiscordUserCard(ctx context.Context, searchString string, buttonsEnabled bool, longCard bool) (*UserCard, error) {
+// CardOptions selects how GetDiscordUserCard renders a card.
+type CardOptions struct {
+	// Buttons enables the card's controls; a card without it shows them disabled.
+	Buttons bool
+	// Long adds the recent sessions and the controls (VLAN menu and buttons) to the card.
+	Long bool
+	// SelectedVLAN is the VLAN chosen in the card's menu, 0 for none. The menu shows it as chosen when it is one of
+	// the switch's VLANs (else the switch's primary VLAN), and the change button carries it.
+	SelectedVLAN int
+}
+
+// GetDiscordUserCard looks up the client matching searchString and renders its card. A search that matches nothing
+// yields a card whose Content says so.
+func (dc *DiscordController) GetDiscordUserCard(ctx context.Context, searchString string, opts CardOptions) (*UserCard, error) {
 	card := &UserCard{
 		Content: "",
 	}
@@ -168,19 +181,19 @@ func (dc *DiscordController) GetDiscordUserCard(ctx context.Context, searchStrin
 		card.Embeds[0].Fields = append(card.Embeds[0].Fields, extraFields...)
 	}
 
-	if longCard && len(user.Sessions) > 0 {
+	if opts.Long && len(user.Sessions) > 0 {
 		// We have RADIUS data, so lets put that in here
 		buf := bytes.Buffer{}
 		dc.renderLastSessions(ctx, &buf, user.Sessions)
 		card.Content = "Sessions in descending order:\n```md\n" + buf.String() + "\n```"
-	} else if !longCard {
+	} else if !opts.Long {
 		card.Content = "User found, showing you their card"
 	} else {
 		card.Content = "No session found for this user, check back once they're plugged in."
 	}
 
-	if longCard {
-		dc.assembleActions(ctx, card, user, vlan, buttonsEnabled)
+	if opts.Long {
+		dc.assembleActions(ctx, card, user, vlan, opts)
 	}
 
 	return card, nil
@@ -228,9 +241,11 @@ func (dc *DiscordController) renderLastSessions(ctx context.Context, buf *bytes.
 	table.Render()
 }
 
-func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard, user *User, vlan int, buttonsEnabled bool) {
+func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard, user *User, vlan int, opts CardOptions) {
+	buttonsEnabled := opts.Buttons
+	id := func(a CardAction) string { return CardID{Action: a, MAC: user.MAC}.String() }
 	// Available VLANs
-	availableVLANs := dc.collectAvailableVLANs(ctx, user, buttonsEnabled)
+	availableVLANs := dc.collectAvailableVLANs(ctx, user, opts)
 	vlansMissing := availableVLANs == nil
 	if vlansMissing {
 		slog.Debug("no vlan available")
@@ -248,7 +263,7 @@ func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard
 			Emoji: &discordgo.ComponentEmoji{
 				Name: "✖️",
 			},
-			CustomID: "findLogoutBtn",
+			CustomID: id(ActionLogout),
 		})
 		if !vlansMissing {
 			slog.Debug("adding 'change vlan' button to action menu")
@@ -259,7 +274,7 @@ func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard
 				Emoji: &discordgo.ComponentEmoji{
 					Name: "🔧",
 				},
-				CustomID: "findChangeBtn",
+				CustomID: CardID{Action: ActionChange, MAC: user.MAC, VLAN: opts.SelectedVLAN}.String(),
 			})
 		}
 	} else if len(user.Sessions) > 0 && !vlansMissing {
@@ -272,7 +287,7 @@ func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard
 			Emoji: &discordgo.ComponentEmoji{
 				Name: "✔️",
 			},
-			CustomID: "findLoginBtn",
+			CustomID: id(ActionLogin),
 		})
 	}
 
@@ -286,7 +301,7 @@ func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard
 			Emoji: &discordgo.ComponentEmoji{
 				Name: "✖️",
 			},
-			CustomID: "findCancelBtn",
+			CustomID: id(ActionCancel),
 		})
 		card.Components = append(card.Components, discordgo.ActionsRow{
 			Components: actions,
@@ -294,7 +309,9 @@ func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard
 	}
 }
 
-func (dc *DiscordController) collectAvailableVLANs(ctx context.Context, user *User, buttonsEnabled bool) *discordgo.ActionsRow {
+// collectAvailableVLANs renders the VLAN menu of the switch the client's newest session is on, or returns nil if that
+// switch is unknown. The option for opts.SelectedVLAN is the default when the switch has it, else the primary VLAN's.
+func (dc *DiscordController) collectAvailableVLANs(ctx context.Context, user *User, opts CardOptions) *discordgo.ActionsRow {
 	if len(user.Sessions) == 0 {
 		return nil
 	}
@@ -311,9 +328,18 @@ func (dc *DiscordController) collectAvailableVLANs(ctx context.Context, user *Us
 	}
 
 	slog.Debug("crafting vlan menu")
+	chosen := -1
+	if switchRef.PrimaryVLAN != nil {
+		chosen = switchRef.PrimaryVLAN.VLANID
+	}
+	for _, vlan := range switchRef.VLANs {
+		if opts.SelectedVLAN != 0 && vlan.VLANID == opts.SelectedVLAN {
+			chosen = opts.SelectedVLAN
+		}
+	}
 	var vlanMenu []discordgo.SelectMenuOption
 	for _, vlan := range switchRef.VLANs {
-		isDefault := switchRef.PrimaryVLAN != nil && switchRef.PrimaryVLAN.VLANID == vlan.VLANID
+		isDefault := vlan.VLANID == chosen
 		vlanMenu = append(vlanMenu, discordgo.SelectMenuOption{
 			Description: vlan.Description,
 			Value:       fmt.Sprint(vlan.VLANID),
@@ -325,10 +351,10 @@ func (dc *DiscordController) collectAvailableVLANs(ctx context.Context, user *Us
 		Components: []discordgo.MessageComponent{
 			discordgo.SelectMenu{
 				MaxValues:   1,
-				CustomID:    "findVlanSelect",
+				CustomID:    CardID{Action: ActionSelectVLAN, MAC: user.MAC}.String(),
 				Placeholder: "Default VLAN",
 				Options:     vlanMenu,
-				Disabled:    !buttonsEnabled,
+				Disabled:    !opts.Buttons,
 			},
 		},
 	}

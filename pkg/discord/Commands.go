@@ -77,139 +77,136 @@ func respond(s *discordgo.Session, i *discordgo.InteractionCreate, response *dis
 	}
 }
 
-// respondMessage replies to the interaction with a new plain text message
-func respondMessage(s *discordgo.Session, i *discordgo.InteractionCreate, content string, what string) {
-	respond(s, i, &discordgo.InteractionResponse{
+// messageResponse is a reply with a new plain text message
+func messageResponse(content string) *discordgo.InteractionResponse {
+	return &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
 			Content: content,
 		},
-	}, what)
+	}
 }
 
-// respondCard replies to the interaction with the given user card, using the given response type
-func respondCard(s *discordgo.Session, i *discordgo.InteractionCreate, responseType discordgo.InteractionResponseType, content string, card *controller.UserCard, what string) {
-	respond(s, i, &discordgo.InteractionResponse{
+// cardResponse is a reply of the given type showing the given user card below content
+func cardResponse(responseType discordgo.InteractionResponseType, content string, card *controller.UserCard) *discordgo.InteractionResponse {
+	return &discordgo.InteractionResponse{
 		Type: responseType,
 		Data: &discordgo.InteractionResponseData{
 			Content:    content,
 			Components: card.Components,
 			Embeds:     card.Embeds,
 		},
-	}, what)
+	}
 }
 
-func (d *Discord) handleUserSubcommand(s *discordgo.Session, i *discordgo.InteractionCreate, isPatchCommand bool) {
-	var user = i.Interaction.Member.User
+const (
+	msgInvalidQuery       = "Invalid user query"
+	msgQueryFailed        = "User query failed - check logs for more details"
+	msgUnknownInteraction = "Unknown interaction request - this could be a bug"
+	msgCardUpdateFailed   = "User card update failed - check logs for more details"
+	msgVLANChangeQueued   = "**VLAN change queued**"
+	msgVLANChangeFailed   = "***VLAN change failed!***"
+)
 
-	if !d.IsAuthorized(user.ID) {
-		slog.Info("Unauthorized access to command blocked", "id", user.ID, "name", user.Username)
-		return
+// logoutVLAN is the VLAN a client is moved to when it is logged out.
+const logoutVLAN = 499
+
+// userCommandResponse answers the user and patch subcommands: it looks up the client matching search and shows its
+// card, the long one with enabled controls for the patch command. what names the reply in the log.
+func (d *Discord) userCommandResponse(ctx context.Context, search string, isPatchCommand bool) (resp *discordgo.InteractionResponse, what string) {
+	if len(search) < 3 {
+		return messageResponse(msgInvalidQuery), "invalid user query"
 	}
-
-	// This is a normal, new find request
-	searchString := i.ApplicationCommandData().Options[0].Options[0].StringValue()
-
-	if len(searchString) < 3 {
-		respondMessage(s, i, "Invalid user query", "invalid user query")
-		return
-	}
-
-	if strings.Count(searchString, ":") == 5 {
-		// Special case mac input
-		searchString = strings.Replace(searchString, ":", "", -1)
-		searchString = strings.ToLower(searchString)
-	}
-	if strings.Count(searchString, "-") == 5 {
-		// Special case mac input
-		searchString = strings.Replace(searchString, "-", "", -1)
-		searchString = strings.ToLower(searchString)
-	}
-
-	userCard, err := d.dc.GetDiscordUserCard(d.ctx, searchString, true, isPatchCommand)
+	card, err := d.dc.GetDiscordUserCard(ctx, search, controller.CardOptions{Buttons: true, Long: isPatchCommand})
 	if err != nil {
-		slog.Warn("User query failed", "error", err, "search", searchString)
-		respondMessage(s, i, "User query failed - check logs for more details", "user query failed")
-		return
+		slog.Warn("User query failed", "error", err, "search", search)
+		return messageResponse(msgQueryFailed), "user query failed"
 	}
-	d.macCache[i.Interaction.ID] = userCard.RealMAC
-
-	respondCard(s, i, discordgo.InteractionResponseChannelMessageWithSource, userCard.Content, userCard, "final result")
+	return cardResponse(discordgo.InteractionResponseChannelMessageWithSource, card.Content, card), "final result"
 }
 
-func (d *Discord) handlePatchSubcommand(s *discordgo.Session, i *discordgo.InteractionCreate, newOrExisting bool) {
-	var user = i.Interaction.Member.User
-
-	if !d.IsAuthorized(user.ID) {
-		slog.Info("Unauthorized access to command blocked", "id", user.ID, "name", user.Username)
-		return
+// componentResponse answers a click on a control of a user card. The control's CustomID carries the client's MAC
+// (and, for the change button, the VLAN chosen in the menu); values are the values chosen in a select menu. what
+// names the reply in the log.
+func (d *Discord) componentResponse(ctx context.Context, customID string, values []string) (resp *discordgo.InteractionResponse, what string) {
+	id, err := controller.ParseCardID(customID)
+	if err != nil {
+		slog.Warn("Unknown card interaction", "error", err)
+		return messageResponse(msgUnknownInteraction), "unknown interaction request"
 	}
-
-	if newOrExisting {
-		d.handleUserSubcommand(s, i, true)
-		return
+	if id.Action == controller.ActionSelectVLAN {
+		return d.vlanSelectResponse(ctx, id, values)
 	}
+	return d.cardButtonResponse(ctx, id)
+}
 
-	// This is an interaction on an existing find request - lets see what we need to do...
-	data := i.Interaction.MessageComponentData()
-	switch data.CustomID {
-	case "findVlanSelect":
-		// The selection changed
-		d.vlanCache[i.Interaction.Message.ID] = data.Values[0]
-		respond(s, i, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseDeferredMessageUpdate,
-		}, "find vlan select")
-	case "findLogoutBtn", "findLoginBtn", "findChangeBtn", "findCancelBtn":
-		d.handleCardButton(s, i, data.CustomID)
+// vlanSelectResponse re-renders the card with the VLAN chosen in its menu, so that the menu shows the choice and the
+// change button carries it.
+func (d *Discord) vlanSelectResponse(ctx context.Context, id controller.CardID, values []string) (*discordgo.InteractionResponse, string) {
+	vlan, err := selectedVLAN(values)
+	if err != nil {
+		slog.Warn("Unknown VLAN selection", "error", err, "mac", id.MAC)
+		return messageResponse(msgUnknownInteraction), "unknown interaction request"
+	}
+	card, err := d.dc.GetDiscordUserCard(ctx, id.MAC.Hex(), controller.CardOptions{Buttons: true, Long: true, SelectedVLAN: vlan})
+	if err != nil {
+		slog.Warn("Error during discord card update", "error", err, "mac", id.MAC)
+		return messageResponse(msgCardUpdateFailed), "card update failed"
+	}
+	return cardResponse(discordgo.InteractionResponseUpdateMessage, card.Content, card), "find vlan select"
+}
+
+// selectedVLAN parses the value chosen in a card's VLAN menu.
+func selectedVLAN(values []string) (int, error) {
+	if len(values) != 1 {
+		return 0, fmt.Errorf("want one selected value, got %d", len(values))
+	}
+	vlan, err := strconv.Atoi(values[0])
+	if err != nil || vlan <= 0 {
+		return 0, fmt.Errorf("bad VLAN value %q", values[0])
+	}
+	return vlan, nil
+}
+
+// requestedVLAN returns the VLAN a button press on a card asks for, and false for a control that changes nothing
+// (cancel, or the menu). 0 means the primary VLAN of the client's switch.
+func requestedVLAN(id controller.CardID) (vlan int, change bool) {
+	switch id.Action {
+	case controller.ActionLogout:
+		return logoutVLAN, true
+	case controller.ActionChange:
+		return id.VLAN, true
+	case controller.ActionLogin:
+		return 0, true
 	default:
-		respondMessage(s, i, "Unknown interaction request - this could be a bug", "unknown interaction request")
+		return 0, false
 	}
 }
 
-// handleCardButton handles a button press on a user card: it queues the VLAN change (unless cancelled) and updates the
-// card so that its controls are disabled.
-func (d *Discord) handleCardButton(s *discordgo.Session, i *discordgo.InteractionCreate, customID string) {
-	// We need to get the id of the original message that triggered the original interaction
-	cachedMAC := d.macCache[i.Interaction.Message.Interaction.ID]
-
+// cardButtonResponse handles a button press on a user card: it queues the VLAN change (unless cancelled) and updates
+// the card so that its controls are disabled.
+func (d *Discord) cardButtonResponse(ctx context.Context, id controller.CardID) (*discordgo.InteractionResponse, string) {
 	message := ""
-	if customID != "findCancelBtn" {
-		// All these buttons change the VLAN. Lets see...
-		var targetVLAN string
-		if customID == "findLogoutBtn" {
-			targetVLAN = "499"
-		} else {
-			var ok bool
-			if targetVLAN, ok = d.vlanCache[i.Interaction.Message.ID]; !ok {
-				// No vlan specified - fetch the default vlan
-				targetVLAN = "1"
-			}
-		}
-
-		message = "**VLAN change queued**"
-		if err := d.queueVLANChange(d.ctx, cachedMAC, targetVLAN); err != nil {
-			slog.Warn("VLAN change request failed", "error", err, "mac", cachedMAC, "targetVLAN", targetVLAN)
-			message = "***VLAN change failed!***"
+	if vlan, change := requestedVLAN(id); change {
+		message = msgVLANChangeQueued
+		if err := d.queueVLANChange(ctx, id.MAC, vlan); err != nil {
+			slog.Warn("VLAN change request failed", "error", err, "mac", id.MAC, "targetVLAN", vlan)
+			message = msgVLANChangeFailed
 		}
 	}
 
 	// Also, lets update the user card so that stuff is disabled...
-	card, err := d.dc.GetDiscordUserCard(d.ctx, cachedMAC, false, false)
+	card, err := d.dc.GetDiscordUserCard(ctx, id.MAC.Hex(), controller.CardOptions{})
 	if err != nil {
-		slog.Warn("Error during discord card update", "error", err, "mac", cachedMAC)
-		respondMessage(s, i, "\n"+message+"\n\nUser card update failed - check logs for more details", "card update failed")
-		return
+		slog.Warn("Error during discord card update", "error", err, "mac", id.MAC)
+		return messageResponse("\n" + message + "\n\n" + msgCardUpdateFailed), "card update failed"
 	}
-	respondCard(s, i, discordgo.InteractionResponseUpdateMessage, "\n"+message+"\n\n"+card.Content, card, "card update")
+	return cardResponse(discordgo.InteractionResponseUpdateMessage, "\n"+message+"\n\n"+card.Content, card), "card update"
 }
 
 // queueVLANChange validates the requested VLAN against the VLANs of the switch the client is connected to and queues
-// a job moving the client there. "1" or a VLAN unknown to the switch selects the switch's primary VLAN.
-func (d *Discord) queueVLANChange(ctx context.Context, macString string, targetVLAN string) error {
-	m, err := mac.Parse(macString)
-	if err != nil {
-		return fmt.Errorf("parsing mac %q: %w", macString, err)
-	}
+// a job moving the client there. 0 or a VLAN unknown to the switch selects the switch's primary VLAN.
+func (d *Discord) queueVLANChange(ctx context.Context, m mac.MAC, vlan int) error {
 	sessions, err := freeradius.SessionsForMAC(ctx, d.db.Querier(), m)
 	if err != nil {
 		return fmt.Errorf("looking up sessions: %w", err)
@@ -221,31 +218,53 @@ func (d *Discord) queueVLANChange(ctx context.Context, macString string, targetV
 	if err != nil {
 		return err
 	}
-
-	vlan, err := strconv.Atoi(targetVLAN)
+	vlan, err = resolveVLAN(switchRef, vlan)
 	if err != nil {
-		return fmt.Errorf("parsing target vlan %q: %w", targetVLAN, err)
+		return err
 	}
-
-	known := false
-	if vlan != 1 {
-		for _, v := range switchRef.VLANs {
-			if v.VLANID == vlan {
-				known = true
-			}
-		}
-	}
-	if !known {
-		if switchRef.PrimaryVLAN == nil {
-			return fmt.Errorf("primary vlan of switch %s is not among its vlans", switchRef.Hostname)
-		}
-		vlan = switchRef.PrimaryVLAN.VLANID
-	}
-
 	if err := d.dc.ChangeUserVLAN(ctx, m, vlan); err != nil {
 		return fmt.Errorf("queueing vlan change to %d: %w", vlan, err)
 	}
 	return nil
+}
+
+// resolveVLAN returns vlan if sw has it, else sw's primary VLAN (so 0 asks for the primary VLAN).
+func resolveVLAN(sw switches.Switch, vlan int) (int, error) {
+	if vlan != 0 {
+		for _, v := range sw.VLANs {
+			if v.VLANID == vlan {
+				return vlan, nil
+			}
+		}
+	}
+	if sw.PrimaryVLAN == nil {
+		return 0, fmt.Errorf("primary vlan of switch %s is not among its vlans", sw.Hostname)
+	}
+	return sw.PrimaryVLAN.VLANID, nil
+}
+
+// handleUserSubcommand answers the user subcommand, or the patch subcommand if isPatchCommand.
+func (d *Discord) handleUserSubcommand(s *discordgo.Session, i *discordgo.InteractionCreate, isPatchCommand bool) {
+	var user = i.Interaction.Member.User
+	if !d.IsAuthorized(user.ID) {
+		slog.Info("Unauthorized access to command blocked", "id", user.ID, "name", user.Username)
+		return
+	}
+	searchString := i.ApplicationCommandData().Options[0].Options[0].StringValue()
+	resp, what := d.userCommandResponse(d.ctx, searchString, isPatchCommand)
+	respond(s, i, resp, what)
+}
+
+// handleCardComponent answers a click on a control of a user card.
+func (d *Discord) handleCardComponent(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	var user = i.Interaction.Member.User
+	if !d.IsAuthorized(user.ID) {
+		slog.Info("Unauthorized access to command blocked", "id", user.ID, "name", user.Username)
+		return
+	}
+	data := i.Interaction.MessageComponentData()
+	resp, what := d.componentResponse(d.ctx, data.CustomID, data.Values)
+	respond(s, i, resp, what)
 }
 
 func (d *Discord) setupHandlers(s *discordgo.Session) error {
@@ -256,11 +275,11 @@ func (d *Discord) setupHandlers(s *discordgo.Session) error {
 				d.handleUserSubcommand(s, i, false)
 			} else if i.ApplicationCommandData().Name == CMD_ROOT_NAME && i.ApplicationCommandData().Options[0].Name == CMD_PATCH_NAME {
 				// We're supposed to patch someone!
-				d.handlePatchSubcommand(s, i, true)
+				d.handleUserSubcommand(s, i, true)
 			}
 		} else if i.Type == discordgo.InteractionMessageComponent {
-			if strings.Index(i.Interaction.MessageComponentData().CustomID, "find") == 0 {
-				d.handlePatchSubcommand(s, i, false)
+			if strings.HasPrefix(i.Interaction.MessageComponentData().CustomID, "find") {
+				d.handleCardComponent(s, i)
 			}
 		}
 	})

@@ -32,10 +32,16 @@ func onSwitch(ip, port string) func(*model.Radacct) {
 	return func(r *model.Radacct) { r.Nasipaddress, r.Nasportid = ip, ptr(port) }
 }
 
-// card fetches the user card for search and fails the test on error.
+// card fetches the user card for search with enabled buttons and fails the test on error.
 func (h *harness) card(search string, longCard bool) *UserCard {
 	h.t.Helper()
-	c, err := h.dc.GetDiscordUserCard(h.ctx, search, true, longCard)
+	return h.cardWith(search, CardOptions{Buttons: true, Long: longCard})
+}
+
+// cardWith fetches the user card for search with the given options and fails the test on error.
+func (h *harness) cardWith(search string, opts CardOptions) *UserCard {
+	h.t.Helper()
+	c, err := h.dc.GetDiscordUserCard(h.ctx, search, opts)
 	if err != nil {
 		h.t.Fatalf("GetDiscordUserCard(%q): %v", search, err)
 	}
@@ -65,8 +71,18 @@ func wantField(t *testing.T, c *UserCard, name, want string) {
 	}
 }
 
-// component returns the component with the given CustomID inside the card's action rows, or nil.
-func component(c *UserCard, id string) discordgo.MessageComponent {
+// component returns the component whose CustomID parses to a CardID with the given action inside the card's action
+// rows, together with that CardID, or nil. It fails the test on a CustomID that does not parse.
+func component(t *testing.T, c *UserCard, action CardAction) (discordgo.MessageComponent, CardID) {
+	t.Helper()
+	parse := func(s string) CardID {
+		t.Helper()
+		id, err := ParseCardID(s)
+		if err != nil {
+			t.Fatalf("component CustomID: %v", err)
+		}
+		return id
+	}
 	for _, row := range c.Components {
 		var inner []discordgo.MessageComponent
 		switch r := row.(type) {
@@ -78,27 +94,65 @@ func component(c *UserCard, id string) discordgo.MessageComponent {
 		for _, comp := range inner {
 			switch v := comp.(type) {
 			case discordgo.Button:
-				if v.CustomID == id {
-					return v
+				if id := parse(v.CustomID); id.Action == action {
+					return v, id
 				}
 			case discordgo.SelectMenu:
-				if v.CustomID == id {
-					return v
+				if id := parse(v.CustomID); id.Action == action {
+					return v, id
 				}
 			}
 		}
 	}
-	return nil
+	return nil, CardID{}
 }
 
-// wantButton checks that the card has an enabled button with the given CustomID.
-func wantButton(t *testing.T, c *UserCard, id string) {
+// has reports whether the card has a control with the given action.
+func has(t *testing.T, c *UserCard, action CardAction) bool {
 	t.Helper()
-	b, ok := component(c, id).(discordgo.Button)
+	comp, _ := component(t, c, action)
+	return comp != nil
+}
+
+// wantButton checks that the card has an enabled button with the given action carrying m, and returns its CardID.
+func wantButton(t *testing.T, c *UserCard, action CardAction, m mac.MAC) CardID {
+	t.Helper()
+	comp, id := component(t, c, action)
+	b, ok := comp.(discordgo.Button)
 	if !ok {
-		t.Errorf("no button %q", id)
-	} else if b.Disabled {
-		t.Errorf("button %q is disabled", id)
+		t.Errorf("no button %q", action)
+		return id
+	}
+	if b.Disabled {
+		t.Errorf("button %q is disabled", action)
+	}
+	if id.MAC != m {
+		t.Errorf("button %q carries MAC %s, want %s", action, id.MAC, m)
+	}
+	return id
+}
+
+// vlanMenu returns the card's VLAN menu and checks that it carries m.
+func vlanMenu(t *testing.T, c *UserCard, m mac.MAC) discordgo.SelectMenu {
+	t.Helper()
+	comp, id := component(t, c, ActionSelectVLAN)
+	menu, ok := comp.(discordgo.SelectMenu)
+	if !ok {
+		t.Fatal("no VLAN menu")
+	}
+	if id.MAC != m {
+		t.Errorf("VLAN menu carries MAC %s, want %s", id.MAC, m)
+	}
+	return menu
+}
+
+// wantDefault checks that exactly the option with value want is the menu's default.
+func wantDefault(t *testing.T, menu discordgo.SelectMenu, want string) {
+	t.Helper()
+	for _, o := range menu.Options {
+		if isWant := o.Value == want; o.Default != isWant {
+			t.Errorf("option %s Default = %v, want %v", o.Value, o.Default, isWant)
+		}
 	}
 }
 
@@ -159,26 +213,52 @@ func TestUserCard_LongCardFull(t *testing.T) {
 		t.Errorf("Content = %q, want the sessions table", c.Content)
 	}
 
-	menu, ok := component(c, "findVlanSelect").(discordgo.SelectMenu)
-	if !ok {
-		t.Fatal("no findVlanSelect menu")
-	}
+	menu := vlanMenu(t, c, fc.m)
 	if menu.Disabled {
-		t.Error("findVlanSelect is disabled")
+		t.Error("VLAN menu is disabled")
 	}
 	if len(menu.Options) != 2 {
 		t.Fatalf("VLAN options = %d, want 2", len(menu.Options))
 	}
-	for _, o := range menu.Options {
-		if want := o.Value == "10"; o.Default != want {
-			t.Errorf("option %s Default = %v, want %v", o.Value, o.Default, want)
+	wantDefault(t, menu, "10")
+	for _, a := range []CardAction{ActionLogout, ActionCancel} {
+		wantButton(t, c, a, fc.m)
+	}
+	if id := wantButton(t, c, ActionChange, fc.m); id.VLAN != 0 {
+		t.Errorf("change button VLAN = %d, want 0 (nothing selected)", id.VLAN)
+	}
+	if has(t, c, ActionLogin) {
+		t.Error("login button present for a logged-in user")
+	}
+}
+
+func TestUserCard_SelectedVLAN(t *testing.T) {
+	h := newHarness(t)
+	fc := h.fullClient(h.testSwitch())
+
+	c := h.cardWith(fc.m.String(), CardOptions{Buttons: true, Long: true, SelectedVLAN: 20})
+	wantDefault(t, vlanMenu(t, c, fc.m), "20")
+	if id := wantButton(t, c, ActionChange, fc.m); id.VLAN != 20 {
+		t.Errorf("change button VLAN = %d, want 20", id.VLAN)
+	}
+
+	// A VLAN the switch does not have leaves the primary VLAN chosen in the menu.
+	c = h.cardWith(fc.m.String(), CardOptions{Buttons: true, Long: true, SelectedVLAN: 30})
+	wantDefault(t, vlanMenu(t, c, fc.m), "10")
+}
+
+func TestUserCard_DisabledControls(t *testing.T) {
+	h := newHarness(t)
+	fc := h.fullClient(h.testSwitch())
+
+	c := h.cardWith(fc.m.String(), CardOptions{Long: true})
+	if !vlanMenu(t, c, fc.m).Disabled {
+		t.Error("VLAN menu is enabled")
+	}
+	for _, a := range []CardAction{ActionLogout, ActionChange, ActionCancel} {
+		if b, _ := component(t, c, a); b == nil || !b.(discordgo.Button).Disabled {
+			t.Errorf("button %q missing or enabled", a)
 		}
-	}
-	for _, id := range []string{"findLogoutBtn", "findChangeBtn", "findCancelBtn"} {
-		wantButton(t, c, id)
-	}
-	if component(c, "findLoginBtn") != nil {
-		t.Error("findLoginBtn present for a logged-in user")
 	}
 }
 
@@ -207,13 +287,11 @@ func TestUserCard_NotLoggedInShowsLoginButton(t *testing.T) {
 
 	c := h.card(m.String(), true)
 	wantField(t, c, "Logged in", "❌")
-	wantButton(t, c, "findLoginBtn")
-	if component(c, "findLogoutBtn") != nil {
-		t.Error("findLogoutBtn present for a user who is not logged in")
+	wantButton(t, c, ActionLogin, m)
+	if has(t, c, ActionLogout) {
+		t.Error("logout button present for a user who is not logged in")
 	}
-	if component(c, "findVlanSelect") == nil {
-		t.Error("no findVlanSelect menu")
-	}
+	vlanMenu(t, c, m)
 }
 
 func TestUserCard_UnknownSwitchHasNoVLANMenu(t *testing.T) {

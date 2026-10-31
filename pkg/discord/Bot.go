@@ -14,7 +14,7 @@ import (
 
 // Discord provides a discord bot interface to this app
 type Discord struct {
-	db *db.DB
+	db controller.Store
 	dc *controller.DiscordController
 
 	// ctx is the base context for all interaction handlers. discordgo invokes handlers on its own goroutines without a
@@ -27,9 +27,6 @@ type Discord struct {
 	privateInfoChannel string
 	token              string
 	guildId            string
-
-	vlanCache map[string]string
-	macCache  map[string]string
 }
 
 // NewDiscord returns a new discord handler configured by cfg
@@ -42,8 +39,6 @@ func NewDiscord(d *db.DB, cfg config.Discord) *Discord {
 		privateInfoChannel: cfg.PrivateInfoChannel,
 		token:              cfg.Token,
 		guildId:            cfg.GuildID,
-		vlanCache:          map[string]string{},
-		macCache:           map[string]string{},
 		dc:                 controller.NewDiscordController(d),
 	}
 	return obj
