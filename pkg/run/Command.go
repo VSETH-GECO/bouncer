@@ -11,6 +11,7 @@ import (
 	"github.com/VSETH-GECO/bouncer/pkg/config"
 	"github.com/VSETH-GECO/bouncer/pkg/controller"
 	"github.com/VSETH-GECO/bouncer/pkg/discord"
+	"github.com/VSETH-GECO/bouncer/pkg/radius"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -107,7 +108,7 @@ func ExecCommand(ctx context.Context) error {
 		}
 	}()
 
-	jobController := controller.NewClientController(d, config.CurrentOptions.SwitchCOASecret)
+	jobController := controller.NewJobController(d, config.CurrentOptions.SwitchCOASecret, radius.Sender{})
 	group.Go(func() error {
 		return jobController.Spin(groupCtx)
 	})

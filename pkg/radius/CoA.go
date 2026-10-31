@@ -17,6 +17,14 @@ type CoARequest struct {
 	SwitchSecret     []byte
 }
 
+// Sender is the real CoA sender behind controller.CoASender: it sends each request to its switch over UDP.
+type Sender struct{}
+
+// SendDisconnect sends req to its switch, see CoARequest.SendDisconnect.
+func (Sender) SendDisconnect(ctx context.Context, req CoARequest) error {
+	return req.SendDisconnect(ctx)
+}
+
 // SendDisconnect sends off the request to the switch. This uses a cisco-specific extension to toggle the port.
 //
 // The underlying RADIUS client does not support contexts. ctx is checked before the request is sent, and its deadline

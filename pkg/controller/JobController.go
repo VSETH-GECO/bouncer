@@ -41,15 +41,25 @@ var (
 	})
 )
 
+// CoASender sends a RADIUS CoA disconnect request to a switch, forcing the client on the session to reauthenticate.
+// radius.Sender is the real implementation; tests substitute a fake.
+type CoASender interface {
+	SendDisconnect(ctx context.Context, req radius.CoARequest) error
+}
+
 type JobController struct {
 	db           *db.DB
 	switchSecret string
+	coa          CoASender
 }
 
-func NewClientController(d *db.DB, switchSecret string) *JobController {
+// NewJobController returns a controller that processes the job queue in d, sending CoA requests signed with
+// switchSecret through coa.
+func NewJobController(d *db.DB, switchSecret string, coa CoASender) *JobController {
 	return &JobController{
 		db:           d,
 		switchSecret: switchSecret,
+		coa:          coa,
 	}
 }
 
@@ -120,7 +130,7 @@ func (c *JobController) ProcessMoveVLANJob(ctx context.Context, job *jobs.Job) e
 				SwitchIP:         session.SwitchIP,
 				SwitchSecret:     []byte(c.switchSecret),
 			}
-			if err := request.SendDisconnect(ctx); err != nil {
+			if err := c.coa.SendDisconnect(ctx, request); err != nil {
 				opsFailedCoA.Inc()
 				return fmt.Errorf("sending CoA: %w", err)
 			}
