@@ -28,9 +28,8 @@ type Discord struct {
 	token              string
 	guildId            string
 
-	commandIds map[string]string
-	vlanCache  map[string]string
-	macCache   map[string]string
+	vlanCache map[string]string
+	macCache  map[string]string
 }
 
 // NewDiscord returns a new discord handler configured by cfg
@@ -43,7 +42,6 @@ func NewDiscord(d *db.DB, cfg config.Discord) *Discord {
 		privateInfoChannel: cfg.PrivateInfoChannel,
 		token:              cfg.Token,
 		guildId:            cfg.GuildID,
-		commandIds:         map[string]string{},
 		vlanCache:          map[string]string{},
 		macCache:           map[string]string{},
 		dc:                 controller.NewDiscordController(d),
@@ -76,7 +74,7 @@ func (d *Discord) Setup(ctx context.Context) error {
 		return fmt.Errorf("opening discord session: %w", err)
 	}
 
-	err = d.migrateCommands(ctx, session)
+	err = d.registerCommands(session)
 	if err != nil {
 		_ = session.Close()
 		return fmt.Errorf("setting up discord commands: %w", err)

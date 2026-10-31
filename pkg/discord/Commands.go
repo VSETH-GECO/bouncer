@@ -10,7 +10,6 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
-	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/freeradius"
 	"github.com/VSETH-GECO/bouncer/internal/mac"
 	"github.com/VSETH-GECO/bouncer/internal/switches"
@@ -23,127 +22,51 @@ const (
 	CMD_PATCH_NAME = "patch"
 )
 
-func (d *Discord) migrateCommands(ctx context.Context, s *discordgo.Session) error {
-	version, err := commandVersion(ctx, d.db.Querier())
-	if errors.Is(err, db.ErrNotFound) {
-		slog.Warn("No previous discord migration entry found, assuming a fresh start")
-		version = 0
-	} else if err != nil {
-		return err
+// commandDefinition returns the application command tree the bot registers: the root command with the user and
+// patch subcommands, each taking a required search string. It is hidden from everyone but administrators (default
+// member permissions 0) and unavailable in DMs.
+func commandDefinition() *discordgo.ApplicationCommand {
+	dmPermission := false
+	var defaultMemberPermissions int64 = 0
+	searchOption := func() []*discordgo.ApplicationCommandOption {
+		return []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "search-string",
+				Description: "The string to search for",
+				Required:    true,
+			},
+		}
 	}
-
-	commands, err := s.ApplicationCommands(s.State.User.ID, d.guildId)
-	if err != nil {
-		return fmt.Errorf("listing application commands: %w", err)
+	return &discordgo.ApplicationCommand{
+		Name:                     CMD_ROOT_NAME,
+		Description:              "PolyLAN network management commands",
+		DMPermission:             &dmPermission,
+		DefaultMemberPermissions: &defaultMemberPermissions,
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        CMD_USER_NAME,
+				Description: "Finds an user by name, email, mac or current ip",
+				Options:     searchOption(),
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        CMD_PATCH_NAME,
+				Description: "Finds an user by name, email, mac or current ip and enters a new patch job into the database",
+				Options:     searchOption(),
+			},
+		},
 	}
-
-	return d.db.WithTx(ctx, func(tx db.Querier) error {
-		return d.migrateCommandsTx(ctx, tx, s, version, commands)
-	})
 }
 
-func (d *Discord) migrateCommandsTx(ctx context.Context, tx db.Querier, s *discordgo.Session, version int, commands []*discordgo.ApplicationCommand) error {
-	switch version {
-	case 0:
-		// Initial command registration
-		err := setCommandVersion(ctx, tx, 1)
-		if err != nil {
-			return err
-		}
-		dmPermission := false
-		var defaultMemberPermission int64 = 0
-		var command = &discordgo.ApplicationCommand{
-			Name:                     CMD_ROOT_NAME,
-			Description:              "PolyLAN network management commands",
-			DMPermission:             &dmPermission,
-			DefaultMemberPermissions: &defaultMemberPermission,
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Name:        CMD_USER_NAME,
-					Description: "Finds and edits user network assignments",
-					Options: []*discordgo.ApplicationCommandOption{
-						{
-							Type:        discordgo.ApplicationCommandOptionString,
-							Name:        "search-string",
-							Description: "The string to search for",
-							Required:    true,
-						},
-					},
-				},
-			},
-		}
-		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, d.guildId, command)
-		if err != nil {
-			return fmt.Errorf("creating application command: %w", err)
-		}
-
-		d.commandIds[CMD_ROOT_NAME] = cmd.ID
-	case 1:
-		err := setCommandVersion(ctx, tx, 2)
-		if err != nil {
-			return err
-		}
-
-		if userCmd, ok := d.commandIds[CMD_ROOT_NAME]; ok {
-			err = s.ApplicationCommandDelete(s.State.User.ID, d.guildId, userCmd)
-			if err != nil {
-				return fmt.Errorf("deleting application command: %w", err)
-			}
-		}
-
-		dmPermission := false
-		var defaultMemberPermission int64 = 0
-		var command = &discordgo.ApplicationCommand{
-			Name:                     CMD_ROOT_NAME,
-			Description:              "PolyLAN network management commands",
-			DMPermission:             &dmPermission,
-			DefaultMemberPermissions: &defaultMemberPermission,
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Name:        CMD_USER_NAME,
-					Description: "Finds an user by name, email, mac or current ip",
-					Options: []*discordgo.ApplicationCommandOption{
-						{
-							Type:        discordgo.ApplicationCommandOptionString,
-							Name:        "search-string",
-							Description: "The string to search for",
-							Required:    true,
-						},
-					},
-				},
-				{
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Name:        CMD_PATCH_NAME,
-					Description: "Finds an user by name, email, mac or current ip and enters a new patch job into the database",
-					Options: []*discordgo.ApplicationCommandOption{
-						{
-							Type:        discordgo.ApplicationCommandOptionString,
-							Name:        "search-string",
-							Description: "The string to search for",
-							Required:    true,
-						},
-					},
-				},
-			},
-		}
-		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, d.guildId, command)
-		if err != nil {
-			return fmt.Errorf("creating application command: %w", err)
-		}
-
-		d.commandIds[CMD_ROOT_NAME] = cmd.ID
+// registerCommands replaces the guild's application commands with commandDefinition. The bulk overwrite is
+// idempotent: commands that already match are left alone and stale ones are removed.
+func (d *Discord) registerCommands(s *discordgo.Session) error {
+	_, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, d.guildId, []*discordgo.ApplicationCommand{commandDefinition()})
+	if err != nil {
+		return fmt.Errorf("registering application commands: %w", err)
 	}
-
-	if _, ok := d.commandIds[CMD_ROOT_NAME]; !ok {
-		for _, cmd := range commands {
-			if cmd.Name == CMD_ROOT_NAME {
-				d.commandIds[CMD_ROOT_NAME] = cmd.ID
-			}
-		}
-	}
-
 	return nil
 }
 
