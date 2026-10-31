@@ -158,7 +158,7 @@ func TestRun_CancelInterruptsBackoffWait(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var rounds atomic.Int32
-	failed := make(chan struct{})
+	waiting := make(chan time.Duration, 1)
 	done := make(chan error, 1)
 	go func() {
 		done <- Run(ctx, Loop{
@@ -166,14 +166,19 @@ func TestRun_CancelInterruptsBackoffWait(t *testing.T) {
 			Interval: time.Hour,
 			MaxWait:  time.Hour,
 			Round: func(context.Context) error {
-				if rounds.Add(1) == 1 {
-					close(failed)
-				}
+				rounds.Add(1)
 				return errors.New("fail")
+			},
+			// Reports the wait it is asked for, then really waits: once the test hears from it, Run is in its wait.
+			sleep: func(ctx context.Context, d time.Duration) error {
+				waiting <- d
+				return timerSleep(ctx, d)
 			},
 		})
 	}()
-	<-failed
+	if d := <-waiting; d != time.Hour {
+		t.Errorf("backoff wait = %v, want 1h", d)
+	}
 	cancel()
 	select {
 	case err := <-done:
