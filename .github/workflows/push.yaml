@@ -1,16 +1,63 @@
-name: Create and publish a Docker image
+name: Test, build and deploy
 
-on:
-  push:
-    branches: ["master"]
+on: push
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push-image:
+  test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l ./cmd ./pkg ./internal)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Check go.mod and go.sum are tidy
+        run: go mod tidy -diff
+
+      # Pull the test database image up front so that the download does not count against the container start timeout
+      - name: Pull MySQL image
+        run: docker pull mysql:8.0.36
+
+      # The runner sets CI=true, which makes a test database container that cannot start a test failure instead of a
+      # skip
+      - name: Test
+        run: go test ./... -count=1
+
+  build-and-push-image:
+    needs: test
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
@@ -34,7 +81,6 @@ jobs:
           context: .
           push: true
           tags: ${{ env.REGISTRY }}/vseth-geco/bouncer:${{ env.SHORT_SHA }}
-          labels: ${{ steps.meta.outputs.labels }}
 
       - name: Generate GitHub App Token
         uses: actions/create-github-app-token@v2
