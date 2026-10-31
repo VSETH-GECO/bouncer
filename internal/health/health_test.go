@@ -59,16 +59,18 @@ func TestFreshRegistry_LiveAndReady(t *testing.T) {
 	expect(t, "/healthz", r.LiveHandler(), http.StatusOK, "ok")
 	expect(t, "/readyz", r.ReadyHandler(), http.StatusOK, "ok")
 
-	r.Heartbeat("loop", time.Minute)
+	hb := r.Heartbeat("loop", time.Minute)
 	r.AddCheck("db", func(context.Context) error { return nil })
 	expect(t, "/healthz", r.LiveHandler(), http.StatusOK, "ok")
+	hb.Beat()
 	expect(t, "/readyz", r.ReadyHandler(), http.StatusOK, "ok")
 }
 
 func TestStaleHeartbeat(t *testing.T) {
 	r, c := newTestRegistry()
 	hb := r.Heartbeat("job-loop", time.Minute)
-	r.Heartbeat("metrics-sampler", 2*time.Minute)
+	sampler := r.Heartbeat("metrics-sampler", 2*time.Minute)
+	sampler.Beat()
 
 	c.advance(time.Minute)
 	expect(t, "/healthz at maxAge", r.LiveHandler(), http.StatusOK, "ok")
@@ -102,7 +104,7 @@ func TestStop_Unregisters(t *testing.T) {
 
 func TestFailingCheck_NotReadyButLive(t *testing.T) {
 	r, _ := newTestRegistry()
-	r.Heartbeat("job-loop", time.Minute)
+	r.Heartbeat("job-loop", time.Minute).Beat()
 	r.AddCheck("ok", func(context.Context) error { return nil })
 	r.AddCheck("database", func(context.Context) error { return errors.New("connection refused") })
 	r.AddCheck("later", func(context.Context) error { return errors.New("not reached") })
@@ -111,6 +113,42 @@ func TestFailingCheck_NotReadyButLive(t *testing.T) {
 	expect(t, "/readyz", r.ReadyHandler(), http.StatusServiceUnavailable, "database: connection refused")
 	if _, body := probe(t, r.ReadyHandler()); strings.Contains(body, "not reached") {
 		t.Errorf("/readyz body %q reports more than the first failing check", body)
+	}
+}
+
+func TestReady_NeverBeatenHeartbeat(t *testing.T) {
+	r, _ := newTestRegistry()
+	job := r.Heartbeat("job-loop", time.Minute)
+	sampler := r.Heartbeat("metrics-sampler", time.Minute)
+	expect(t, "/healthz", r.LiveHandler(), http.StatusOK, "ok")
+	expect(t, "/readyz", r.ReadyHandler(), http.StatusServiceUnavailable, "no successful round yet: job-loop, metrics-sampler")
+	sampler.Beat()
+	expect(t, "/readyz after sampler beat", r.ReadyHandler(), http.StatusServiceUnavailable, "no successful round yet: job-loop")
+	if _, body := probe(t, r.ReadyHandler()); strings.Contains(body, "metrics-sampler") {
+		t.Errorf("/readyz body %q names the beaten heartbeat", body)
+	}
+	job.Beat()
+	expect(t, "/readyz after both", r.ReadyHandler(), http.StatusOK, "ok")
+}
+
+func TestReady_StopClearsNeverBeaten(t *testing.T) {
+	r, _ := newTestRegistry()
+	hb := r.Heartbeat("job-loop", time.Minute)
+	hb.Stop()
+	expect(t, "/readyz after Stop", r.ReadyHandler(), http.StatusOK, "ok")
+}
+
+func TestReady_NeverBeatenBeforeChecks(t *testing.T) {
+	r, _ := newTestRegistry()
+	r.Heartbeat("job-loop", time.Minute)
+	var ran bool
+	r.AddCheck("database", func(context.Context) error {
+		ran = true
+		return errors.New("connection refused")
+	})
+	expect(t, "/readyz", r.ReadyHandler(), http.StatusServiceUnavailable, "job-loop")
+	if ran {
+		t.Error("Ready ran a check while a heartbeat had never beaten")
 	}
 }
 
@@ -165,18 +203,22 @@ func TestConcurrentBeats(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var wg sync.WaitGroup
+	var wg, beaten sync.WaitGroup // beaten: every loop has beaten once, so Ready need not wait for a first beat
 	for i := range 4 {
 		wg.Add(1)
+		beaten.Add(1)
 		go func() {
 			defer wg.Done()
 			hb := r.Heartbeat("loop"+string(rune('a'+i)), time.Minute)
 			defer hb.Stop()
+			hb.Beat()
+			beaten.Done()
 			for ctx.Err() == nil {
 				hb.Beat()
 			}
 		}()
 	}
+	beaten.Wait()
 	for range 200 {
 		if err := r.Live(time.Now()); err != nil {
 			t.Fatalf("Live = %v", err)

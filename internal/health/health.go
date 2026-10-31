@@ -1,6 +1,7 @@
-// Package health answers the liveness and readiness probes. Liveness means the daemon's loops are not stuck: every loop
-// records a heartbeat per completed round, and a heartbeat that is too old makes the daemon unhealthy. Readiness means
-// the daemon could do its work now: it is live and every readiness check (a database ping, for instance) passes.
+// Package health answers the liveness and readiness probes. Liveness means every loop succeeded recently: a loop records
+// a heartbeat per successful round, and a heartbeat that is too old makes the daemon unhealthy. Readiness means the
+// daemon could do its work now: it is live, every loop has succeeded at least once since it registered, and every
+// readiness check (a database ping, for instance) passes.
 package health
 
 import (
@@ -47,11 +48,13 @@ type Heartbeat struct {
 	name   string
 	maxAge time.Duration
 	last   time.Time // guarded by r.mu
+	beaten bool      // guarded by r.mu; set by the first Beat
 }
 
-// Heartbeat registers a loop under name. It counts as fresh from registration on; the loop calls Beat after every
-// completed round and Stop when it ends for good (a follower stopping to lead, for instance), which unregisters it.
-// A heartbeat older than maxAge makes the registry unhealthy.
+// Heartbeat registers a loop under name. It counts as fresh from registration on, but keeps the registry from being
+// ready until its first Beat; the loop calls Beat after every successful round and Stop when it ends for good (a
+// follower stopping to lead, for instance), which unregisters it. A heartbeat older than maxAge makes the registry
+// unhealthy.
 func (r *Registry) Heartbeat(name string, maxAge time.Duration) *Heartbeat {
 	h := &Heartbeat{r: r, name: name, maxAge: maxAge}
 	r.mu.Lock()
@@ -61,11 +64,12 @@ func (r *Registry) Heartbeat(name string, maxAge time.Duration) *Heartbeat {
 	return h
 }
 
-// Beat records a completed round.
+// Beat records a successful round.
 func (h *Heartbeat) Beat() {
 	h.r.mu.Lock()
 	defer h.r.mu.Unlock()
 	h.last = h.r.now()
+	h.beaten = true
 }
 
 // Stop unregisters the heartbeat. Calling it more than once is harmless.
@@ -100,16 +104,28 @@ func (r *Registry) Live(now time.Time) error {
 	return fmt.Errorf("stale heartbeat: %s", strings.Join(stale, ", "))
 }
 
-// Ready returns Live's error if any, else the first failing check's error, named. A check that does not return once
-// ctx is done is abandoned and counts as failed with ctx's error.
+// Ready returns Live's error if any, else an error naming the registered heartbeats that have never beaten, if any,
+// else the first failing check's error, named. No check runs while a heartbeat has never beaten. A check that does not
+// return once ctx is done is abandoned and counts as failed with ctx's error.
 func (r *Registry) Ready(ctx context.Context) error {
 	if err := r.Live(r.now()); err != nil {
 		return err
 	}
 
 	r.mu.Lock()
+	var pending []string
+	for h := range r.beats {
+		if !h.beaten {
+			pending = append(pending, h.name)
+		}
+	}
 	checks := append([]check(nil), r.checks...)
 	r.mu.Unlock()
+
+	if len(pending) > 0 {
+		sort.Strings(pending)
+		return fmt.Errorf("no successful round yet: %s", strings.Join(pending, ", "))
+	}
 
 	for _, c := range checks {
 		if err := runCheck(ctx, c.fn); err != nil {
