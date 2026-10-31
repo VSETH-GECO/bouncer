@@ -3,12 +3,14 @@ package metrics
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
-	"time"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/freeradius"
+	"github.com/VSETH-GECO/bouncer/internal/loop"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -56,6 +58,7 @@ var (
 func register(r prometheus.Registerer) {
 	r.MustRegister(usersTotal, usersAuthorized, usersActive, usersActivePerVLAN, usersAuthorizedPerVLAN, usersActivePerSwitch,
 		leader)
+	loop.Register(r)
 }
 
 // SetLeader records whether this replica currently leads (runs the jobs and the Discord bot).
@@ -67,18 +70,18 @@ func SetLeader(leading bool) {
 	}
 }
 
-// sample samples all metrics once. A failing query is logged and only leaves its own metric stale.
-func sample(ctx context.Context, q db.Querier) {
+// Sample samples every metric once. A gauge whose query fails keeps its previous value; the returned error joins
+// the failures, each wrapped with its metric name, so a partially failed sample is a failed round.
+func Sample(ctx context.Context, q db.Querier) error {
 	slog.Debug("Updating prometheus metrics...")
-	warn := func(metric string, err error) {
-		if ctx.Err() == nil {
-			slog.Warn("Couldn't update prometheus metric", "error", err, "metric", metric)
-		}
+	var errs []error
+	fail := func(metric string, err error) {
+		errs = append(errs, fmt.Errorf("%s: %w", metric, err))
 	}
 	setGauge := func(g prometheus.Gauge, name string, count func(context.Context, db.Querier) (int, error)) {
 		n, err := count(ctx, q)
 		if err != nil {
-			warn(name, err)
+			fail(name, err)
 			return
 		}
 		g.Set(float64(n))
@@ -89,7 +92,7 @@ func sample(ctx context.Context, q db.Querier) {
 	setGauge(usersActive, "bouncer_users_active", freeradius.CountActive)
 
 	if counts, err := freeradius.AuthorizedPerVLAN(ctx, q); err != nil {
-		warn("bouncer_users_per_vlan", err)
+		fail("bouncer_users_per_vlan", err)
 	} else {
 		usersAuthorizedPerVLAN.Reset()
 		for _, c := range counts {
@@ -97,7 +100,7 @@ func sample(ctx context.Context, q db.Querier) {
 		}
 	}
 	if counts, err := freeradius.ActivePerVLAN(ctx, q); err != nil {
-		warn("bouncer_users_active_per_vlan", err)
+		fail("bouncer_users_active_per_vlan", err)
 	} else {
 		usersActivePerVLAN.Reset()
 		for _, c := range counts {
@@ -105,7 +108,7 @@ func sample(ctx context.Context, q db.Querier) {
 		}
 	}
 	if counts, err := freeradius.ActivePerSwitch(ctx, q); err != nil {
-		warn("bouncer_users_active_per_switch", err)
+		fail("bouncer_users_active_per_switch", err)
 	} else {
 		usersActivePerSwitch.Reset()
 		for _, c := range counts {
@@ -113,27 +116,5 @@ func sample(ctx context.Context, q db.Querier) {
 		}
 	}
 	slog.Debug("Updating prometheus metrics done!")
-}
-
-// RunSampler samples immediately and then every few seconds until ctx is cancelled. It calls beat (if not nil) after
-// every completed sample, failed queries included.
-func RunSampler(ctx context.Context, q db.Querier, beat func()) {
-	round := func() {
-		sample(ctx, q)
-		if beat != nil {
-			beat()
-		}
-	}
-	round()
-
-	ticker := time.NewTicker(7 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			round()
-		}
-	}
+	return errors.Join(errs...)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/health"
 	"github.com/VSETH-GECO/bouncer/internal/leader"
+	"github.com/VSETH-GECO/bouncer/internal/loop"
 	"github.com/VSETH-GECO/bouncer/internal/metrics"
 	"github.com/VSETH-GECO/bouncer/pkg/config"
 	"github.com/VSETH-GECO/bouncer/pkg/controller"
@@ -19,9 +20,13 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// heartbeatMaxAge is how long a loop may go without completing a round before /healthz fails. The sampler ticks every
-// 7 s and the job loop every 5 s, so this tolerates a few slow rounds.
-const heartbeatMaxAge = 60 * time.Second
+const (
+	// heartbeatMaxAge is how long a loop may go without a successful round before /healthz fails. The backoff cap
+	// of a failing loop is half of it (see runLoop), so a loop gets a few retries before the probe fails.
+	heartbeatMaxAge = 60 * time.Second
+	// samplerInterval is the wait between two metric samples.
+	samplerInterval = 7 * time.Second
+)
 
 // ExecCommand executes the main loop until ctx is cancelled or a component fails. Once ctx is cancelled it returns an
 // error wrapping context.Canceled; main treats that as a clean shutdown.
@@ -71,11 +76,9 @@ func ExecCommand(ctx context.Context, cfg config.Config) error {
 
 	if cfg.Run.Prometheus {
 		mux.Handle("/metrics", metrics.Handler())
-		sampler := probes.Heartbeat("metrics-sampler", heartbeatMaxAge)
 		group.Go(func() error {
-			defer sampler.Stop()
-			metrics.RunSampler(groupCtx, d.Querier(), sampler.Beat)
-			return nil
+			return runLoop(groupCtx, probes, "metrics-sampler", samplerInterval, heartbeatMaxAge,
+				func(ctx context.Context) error { return metrics.Sample(ctx, d.Querier()) })
 		})
 	}
 
@@ -95,6 +98,21 @@ func ExecCommand(ctx context.Context, cfg config.Config) error {
 	}
 
 	return group.Wait()
+}
+
+// runLoop registers a heartbeat for the loop, runs it through loop.Run with a backoff cap of half the heartbeat
+// window, and unregisters the heartbeat when the loop ends.
+func runLoop(ctx context.Context, probes *health.Registry, name string, interval, maxAge time.Duration,
+	round func(context.Context) error) error {
+	hb := probes.Heartbeat(name, maxAge)
+	defer hb.Stop()
+	return loop.Run(ctx, loop.Loop{
+		Name:     name,
+		Interval: interval,
+		MaxWait:  maxAge / 2,
+		Round:    round,
+		Beat:     hb.Beat,
+	})
 }
 
 // runLeader runs what only the leading replica may run, the Discord bot and the job controller, until ctx is cancelled

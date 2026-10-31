@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +43,9 @@ func TestSample_DistinctUsers(t *testing.T) {
 	const sw = "10.77.13.1" // unique to this test
 
 	// Sample first so the baseline reflects what the shared database already holds, not the gauges' initial zero.
-	sample(ctx, tx)
+	if err := Sample(ctx, tx); err != nil {
+		t.Fatalf("Sample: %v", err)
+	}
 	activeBefore := gaugeValue(t, usersActive)
 	authorizedBefore := gaugeValue(t, usersAuthorized)
 
@@ -59,7 +62,9 @@ func TestSample_DistinctUsers(t *testing.T) {
 	p.Session(on(a, nil))
 	p.Session(on(b, &stop))
 
-	sample(ctx, tx)
+	if err := Sample(ctx, tx); err != nil {
+		t.Fatalf("Sample: %v", err)
+	}
 
 	if got := gaugeValue(t, usersActive) - activeBefore; got != 1 {
 		t.Errorf("usersActive delta = %v, want 1", got)
@@ -93,7 +98,16 @@ func TestSample_FailedQueryKeepsValues(t *testing.T) {
 	usersActive.Set(7)
 	usersActivePerSwitch.WithLabelValues(sw).Set(5)
 
-	sample(context.Background(), failingQuerier{})
+	err := Sample(context.Background(), failingQuerier{})
+	if err == nil {
+		t.Fatal("Sample with a failing querier returned nil")
+	}
+	for _, name := range []string{"bouncer_users_total", "bouncer_users_authorized", "bouncer_users_active",
+		"bouncer_users_per_vlan", "bouncer_users_active_per_vlan", "bouncer_users_active_per_switch"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("error %q does not name %s", err, name)
+		}
+	}
 
 	if got := gaugeValue(t, usersActive); got != 7 {
 		t.Errorf("usersActive = %v, want 7", got)
@@ -122,33 +136,5 @@ func TestSetLeader(t *testing.T) {
 	SetLeader(false)
 	if v := gaugeValue(t, leader); v != 0 {
 		t.Fatalf("bouncer_leader = %v after SetLeader(false), want 0", v)
-	}
-}
-
-func TestRunSampler_CancelledContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	run := func(beat func()) {
-		t.Helper()
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			// The failing querier leaves every gauge as it is, so the shared collectors are not disturbed.
-			RunSampler(ctx, failingQuerier{}, beat)
-		}()
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Fatal("RunSampler did not return within a second of a cancelled context")
-		}
-	}
-
-	run(nil)
-
-	beats := 0
-	run(func() { beats++ })
-	if beats != 1 {
-		t.Errorf("beats = %d, want exactly 1 (the immediate sample)", beats)
 	}
 }
