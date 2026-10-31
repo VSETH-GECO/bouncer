@@ -28,11 +28,17 @@ func (a CardAction) valid() bool {
 	return false
 }
 
+// carriesVLAN reports whether a control of action a carries the VLAN chosen in the card's menu: the change and the
+// login button do.
+func (a CardAction) carriesVLAN() bool {
+	return a == ActionChange || a == ActionLogin
+}
+
 // maxVLAN is the highest valid 802.1Q VLAN ID.
 const maxVLAN = 4094
 
 // CardID identifies a control on a user card together with the state the control needs: the client's MAC and, for
-// the change button, the VLAN chosen in the menu (0 when none was chosen). It is encoded into the Discord CustomID
+// the change and the login button, the VLAN chosen in the menu (0 when none was chosen). It is encoded into the Discord CustomID
 // so the bot keeps no state between interactions.
 type CardID struct {
 	Action CardAction
@@ -40,17 +46,17 @@ type CardID struct {
 	VLAN   int
 }
 
-// String encodes c as a Discord CustomID: "<action>:<mac hex>", or "<action>:<mac hex>:<vlan>" for ActionChange.
-// The VLAN of any other action is not encoded.
+// String encodes c as a Discord CustomID: "<action>:<mac hex>", or "<action>:<mac hex>:<vlan>" for ActionChange and
+// ActionLogin. The VLAN of any other action is not encoded.
 func (c CardID) String() string {
-	if c.Action == ActionChange {
+	if c.Action.carriesVLAN() {
 		return fmt.Sprintf("%s:%s:%d", c.Action, c.MAC.Hex(), c.VLAN)
 	}
 	return fmt.Sprintf("%s:%s", c.Action, c.MAC.Hex())
 }
 
 // ParseCardID decodes a CustomID produced by CardID.String. An unknown action, a missing or malformed MAC, or a
-// missing or malformed VLAN on ActionChange is an error; so is a bare action from a card rendered before the IDs
+// missing or malformed VLAN on ActionChange or ActionLogin is an error; so is a bare action from a card rendered before the IDs
 // carried the MAC.
 func ParseCardID(s string) (CardID, error) {
 	parts := strings.Split(s, ":")
@@ -59,7 +65,7 @@ func ParseCardID(s string) (CardID, error) {
 		return CardID{}, fmt.Errorf("card id %q: unknown action %q", s, parts[0])
 	}
 	want := 2
-	if id.Action == ActionChange {
+	if id.Action.carriesVLAN() {
 		want = 3
 	}
 	if len(parts) != want {
@@ -70,7 +76,7 @@ func ParseCardID(s string) (CardID, error) {
 		return CardID{}, fmt.Errorf("card id %q: bad MAC %q", s, parts[1])
 	}
 	id.MAC = m
-	if id.Action == ActionChange {
+	if id.Action.carriesVLAN() {
 		v, err := strconv.Atoi(parts[2])
 		if err != nil || v < 0 || v > maxVLAN || strconv.Itoa(v) != parts[2] {
 			return CardID{}, fmt.Errorf("card id %q: bad VLAN %q", s, parts[2])

@@ -31,6 +31,7 @@ func TestRequestedVLAN(t *testing.T) {
 		{controller.CardID{Action: controller.ActionChange, MAC: m, VLAN: 620}, 620, true},
 		{controller.CardID{Action: controller.ActionChange, MAC: m}, 0, true},
 		{controller.CardID{Action: controller.ActionLogin, MAC: m}, 0, true},
+		{controller.CardID{Action: controller.ActionLogin, MAC: m, VLAN: 620}, 620, true},
 		{controller.CardID{Action: controller.ActionCancel, MAC: m}, 0, false},
 		{controller.CardID{Action: controller.ActionSelectVLAN, MAC: m}, 0, false},
 	} {
@@ -240,7 +241,7 @@ func TestComponentResponse_Buttons(t *testing.T) {
 		name    string
 		with499 bool
 		action  controller.CardAction
-		vlan    int // VLAN in the change button's ID
+		vlan    int // VLAN in the change or login button's ID
 		want    int // queued target VLAN, 0 for none
 		message string
 	}{
@@ -248,6 +249,7 @@ func TestComponentResponse_Buttons(t *testing.T) {
 		{"change without selection", false, controller.ActionChange, 0, 610, msgVLANChangeQueued},
 		{"change to unknown VLAN", false, controller.ActionChange, 630, 610, msgVLANChangeQueued},
 		{"login", false, controller.ActionLogin, 0, 610, msgVLANChangeQueued},
+		{"login to selected", false, controller.ActionLogin, 620, 620, msgVLANChangeQueued},
 		{"logout", true, controller.ActionLogout, 0, 499, msgVLANChangeQueued},
 		// queueVLANChange maps a VLAN the switch does not have to its primary one, 499 included.
 		{"logout on a switch without 499", false, controller.ActionLogout, 0, 610, msgVLANChangeQueued},

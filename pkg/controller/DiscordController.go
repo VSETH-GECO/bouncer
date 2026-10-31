@@ -56,7 +56,7 @@ type CardOptions struct {
 	// Long adds the recent sessions and the controls (VLAN menu and buttons) to the card.
 	Long bool
 	// SelectedVLAN is the VLAN chosen in the card's menu, 0 for none. The menu shows it as chosen when it is one of
-	// the switch's VLANs (else the switch's primary VLAN), and the change button carries it.
+	// the switch's VLANs (else the switch's primary VLAN), and the change and login buttons carry it.
 	SelectedVLAN int
 }
 
@@ -292,7 +292,7 @@ func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard
 			Emoji: &discordgo.ComponentEmoji{
 				Name: "✔️",
 			},
-			CustomID: id(ActionLogin),
+			CustomID: CardID{Action: ActionLogin, MAC: user.MAC, VLAN: opts.SelectedVLAN}.String(),
 		})
 	}
 

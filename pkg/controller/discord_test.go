@@ -287,11 +287,20 @@ func TestUserCard_NotLoggedInShowsLoginButton(t *testing.T) {
 
 	c := h.card(m.String(), true)
 	wantField(t, c, "Logged in", "❌")
-	wantButton(t, c, ActionLogin, m)
+	if id := wantButton(t, c, ActionLogin, m); id.VLAN != 0 {
+		t.Errorf("login button VLAN = %d, want 0 (nothing selected)", id.VLAN)
+	}
 	if has(t, c, ActionLogout) {
 		t.Error("logout button present for a user who is not logged in")
 	}
 	vlanMenu(t, c, m)
+
+	// After a choice in the menu the login button carries the chosen VLAN.
+	c = h.cardWith(m.String(), CardOptions{Buttons: true, Long: true, SelectedVLAN: 20})
+	wantDefault(t, vlanMenu(t, c, m), "20")
+	if id := wantButton(t, c, ActionLogin, m); id.VLAN != 20 {
+		t.Errorf("login button VLAN = %d, want 20", id.VLAN)
+	}
 }
 
 func TestUserCard_UnknownSwitchHasNoVLANMenu(t *testing.T) {

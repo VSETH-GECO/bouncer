@@ -13,6 +13,7 @@ func TestCardID_RoundTrip(t *testing.T) {
 		{Action: ActionSelectVLAN, MAC: m},
 		{Action: ActionLogout, MAC: m},
 		{Action: ActionLogin, MAC: m},
+		{Action: ActionLogin, MAC: m, VLAN: 20},
 		{Action: ActionCancel, MAC: m},
 		{Action: ActionChange, MAC: m},
 		{Action: ActionChange, MAC: m, VLAN: 20},
@@ -47,6 +48,9 @@ func TestCardID_Encoding(t *testing.T) {
 		{CardID{ActionLogout, m, 30}, "findLogoutBtn:aabbccddee01"}, // only the change button carries a VLAN
 		{CardID{ActionChange, m, 0}, "findChangeBtn:aabbccddee01:0"},
 		{CardID{ActionChange, m, 20}, "findChangeBtn:aabbccddee01:20"},
+		{CardID{ActionLogin, m, 0}, "findLoginBtn:aabbccddee01:0"},
+		{CardID{ActionLogin, m, 20}, "findLoginBtn:aabbccddee01:20"},
+		{CardID{ActionCancel, m, 20}, "findCancelBtn:aabbccddee01"},
 		{CardID{ActionSelectVLAN, m, 0}, "findVlanSelect:aabbccddee01"},
 	} {
 		if got := tt.id.String(); got != tt.want {
@@ -60,6 +64,9 @@ func TestParseCardID_Rejects(t *testing.T) {
 		"",
 		"findLogoutBtn", // a card rendered by an older build
 		"findChangeBtn",
+		"findLoginBtn",
+		"findLoginBtn:aabbccddee01",
+		"findLoginBtn:aabbccddee01:x",
 		"findVlanSelect",
 		"findBogusBtn:aabbccddee01",
 		"findLogoutBtn:",

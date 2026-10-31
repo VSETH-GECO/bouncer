@@ -141,7 +141,7 @@ func (d *Discord) componentResponse(ctx context.Context, customID string, values
 }
 
 // vlanSelectResponse re-renders the card with the VLAN chosen in its menu, so that the menu shows the choice and the
-// change button carries it.
+// change and login buttons carry it.
 func (d *Discord) vlanSelectResponse(ctx context.Context, id controller.CardID, values []string) (*discordgo.InteractionResponse, string) {
 	vlan, err := selectedVLAN(values)
 	if err != nil {
@@ -174,10 +174,9 @@ func requestedVLAN(id controller.CardID) (vlan int, change bool) {
 	switch id.Action {
 	case controller.ActionLogout:
 		return logoutVLAN, true
-	case controller.ActionChange:
+	case controller.ActionChange, controller.ActionLogin:
+		// Both carry the VLAN chosen in the menu, 0 if none was chosen.
 		return id.VLAN, true
-	case controller.ActionLogin:
-		return 0, true
 	default:
 		return 0, false
 	}
