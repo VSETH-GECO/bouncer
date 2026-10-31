@@ -2731,6 +2731,10 @@ CREATE TABLE `radpostauth` (
   `reply` varchar(32) NOT NULL DEFAULT '',
   `authdate` timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   `class` varchar(64) NOT NULL DEFAULT '',
+  `nasipaddress` varchar(15) DEFAULT NULL,
+  `nasportid` varchar(50) DEFAULT NULL,
+  `callingstationid` varchar(50) DEFAULT NULL,
+  `vlan` varchar(16) DEFAULT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;

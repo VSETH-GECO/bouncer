@@ -27,6 +27,7 @@ var Tables = []string{
 	"login_logs",
 	"radacct",
 	"radcheck",
+	"radpostauth",
 	"radreply",
 }
 

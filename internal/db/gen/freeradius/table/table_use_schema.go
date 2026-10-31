@@ -21,5 +21,6 @@ func UseSchema(schema string) {
 	LoginLogs = LoginLogs.FromSchema(schema)
 	Radacct = Radacct.FromSchema(schema)
 	Radcheck = Radcheck.FromSchema(schema)
+	Radpostauth = Radpostauth.FromSchema(schema)
 	Radreply = Radreply.FromSchema(schema)
 }
