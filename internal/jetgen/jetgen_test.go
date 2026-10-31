@@ -15,20 +15,14 @@ import (
 	"github.com/VSETH-GECO/bouncer/internal/testdb"
 )
 
-func TestGeneratedCodeIsCurrent(t *testing.T) {
-	inst := testdb.Start(t)
-	ctx := context.Background()
-	h, err := inst.Open(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer h.Close()
-	if err := h.Migrate(ctx, 0); err != nil {
-		t.Fatal(err)
-	}
+func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
 
+// TestGeneratedCodeIsCurrent generates the go-jet code from the shared, migrated test database and diffs it against
+// the committed tree.
+func TestGeneratedCodeIsCurrent(t *testing.T) {
+	ctx := context.Background()
 	tmp := t.TempDir()
-	if err := jetgen.Generate(ctx, inst.Config.DSN(), tmp); err != nil {
+	if err := jetgen.Generate(ctx, testdb.SharedConfig(t).DSN(), tmp); err != nil {
 		t.Fatal(err)
 	}
 	committed := filepath.Join(thisDir(t), "..", "db", "gen")

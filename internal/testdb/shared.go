@@ -39,9 +39,11 @@ func dockerHealth(ctx context.Context) (err error) {
 	return nil
 }
 
-// Main is the body of a test package's TestMain: os.Exit(testdb.Main(m)). It starts one MySQL container for the
-// package, migrates it to the current schema, runs the tests and tears everything down. Tests reach the database
-// through Shared and Tx.
+// Main is the body of a test package's TestMain: os.Exit(testdb.Main(m)). It starts (or attaches to) the MySQL
+// container shared by every package of the `go test` run, migrates it to the current schema and runs the tests.
+// Tests reach the database through Shared and Tx. The container outlives the package: testcontainers' reaper removes
+// it after the whole run (see runShared). Concurrent packages migrating the same database are serialized by the
+// migration lock, and a package that finds it already migrated gets ErrNoChange, which Migrate treats as success.
 //
 // Without a usable Docker daemon the tests still run, and those that call Shared or Tx are skipped, unless the CI
 // environment variable is set, where failing to start the container makes Main return 1.
@@ -57,20 +59,13 @@ func Main(m *testing.M) int {
 		}
 	}
 
-	inst, err := Run(ctx)
+	inst, err := runShared(ctx)
 	if err != nil {
 		return startFailed(ci, m, err)
 	}
 	sharedConfig = inst.Config
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		if err := inst.Terminate(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "testdb: terminating test database: %v\n", err)
-		}
-	}()
 
-	d, err := inst.Open(ctx)
+	d, err := openRetrying(ctx, inst)
 	if err != nil {
 		return startFailed(ci, m, fmt.Errorf("connecting to test database: %w", err))
 	}
@@ -81,6 +76,23 @@ func Main(m *testing.M) int {
 
 	shared = d
 	return m.Run()
+}
+
+// openRetrying connects to inst, retrying every 500ms until it succeeds or ctx is done, and then returns the last
+// error. A package that attaches to a container another package is still initializing sees refused connections until
+// MySQL has finished its init scripts and listens on its final port.
+func openRetrying(ctx context.Context, inst *Instance) (*db.DB, error) {
+	for {
+		d, err := inst.Open(ctx)
+		if err == nil {
+			return d, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
 
 // startFailed handles a container that could not be brought up: a failure in CI, a skip reason elsewhere.

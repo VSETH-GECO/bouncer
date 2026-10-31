@@ -44,9 +44,29 @@ type Instance struct {
 	container testcontainers.Container
 }
 
-// Run starts a MySQL container, loads the base schema into it and waits until it accepts connections. The caller
-// must Terminate it. Tests should use Start instead.
+// Run starts a private MySQL container, loads the base schema into it and waits until it accepts connections. The
+// caller must Terminate it. Tests should use Start instead.
 func Run(ctx context.Context) (*Instance, error) {
+	return run(ctx)
+}
+
+// runShared starts the MySQL container shared by every test package of one `go test` run, or attaches to it when
+// another package has already started it. Main uses it.
+//
+// Containers are shared by name, and the name carries the parent process ID: every test binary that one `go test`
+// invocation spawns has that go command as its parent, so they all find the same container (and, because
+// testcontainers derives its session from the same parent process, share the same reaper), while two concurrent runs
+// on one machine get separate containers. Nobody terminates the shared container: testcontainers' reaper (Ryuk)
+// removes it shortly after the last test binary of the run has disconnected.
+//
+// A package that attaches to the container may do so while another package's MySQL is still running its init
+// scripts, so the returned instance can refuse connections at first; Main retries.
+func runShared(ctx context.Context) (*Instance, error) {
+	return run(ctx, testcontainers.WithReuseByName(fmt.Sprintf("bouncer-testdb-%d", os.Getppid())))
+}
+
+// run starts a MySQL container with the base schema loaded, applying the extra customizers after the defaults.
+func run(ctx context.Context, extra ...testcontainers.ContainerCustomizer) (*Instance, error) {
 	// The MySQL module takes init scripts as host paths; hand it the embedded fixture through a temp file. The file
 	// is copied into the container at creation, so it can go as soon as Run returns.
 	script, err := os.CreateTemp("", "bouncer-base-schema-*.sql")
@@ -62,12 +82,13 @@ func Run(ctx context.Context) (*Instance, error) {
 		return nil, fmt.Errorf("writing base schema to %s: %w", script.Name(), err)
 	}
 
-	ctr, err := tcmysql.Run(ctx, Image,
+	opts := []testcontainers.ContainerCustomizer{
 		tcmysql.WithDatabase(databaseName),
 		tcmysql.WithUsername("root"),
 		tcmysql.WithPassword(rootPassword),
 		tcmysql.WithScripts(script.Name()),
-	)
+	}
+	ctr, err := tcmysql.Run(ctx, Image, append(opts, extra...)...)
 	if err != nil {
 		return nil, fmt.Errorf("starting %s: %w", Image, err)
 	}

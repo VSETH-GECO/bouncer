@@ -42,6 +42,10 @@ Binary only:
 go build -o bouncer github.com/VSETH-GECO/bouncer/cmd
 ```
 
+## Running the tests
+
+The integration tests need Docker. `go test ./...` starts one MySQL 8.0.36 container per run, shared by all test packages and removed by testcontainers' reaper shortly after the run ends. Without Docker the integration tests are skipped; with `CI=1` set that is a failure instead. Tests that insert random rows log their seed: rerun with `TESTGEN_SEED=<seed>` to reproduce them.
+
 ## Regenerating query code
 
 The go-jet table and model code under `internal/db/gen` is generated from the schema fixture plus bouncer's migrations. This needs Docker. After changing the schema or migrations, run `go run ./internal/tools/jetgen` from the module root and commit the result. `go test ./internal/jetgen` fails when the committed code is stale.
