@@ -47,10 +47,24 @@ var (
 		},
 		[]string{"switch"},
 	)
+	leader = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "bouncer_leader",
+		Help: "1 on the replica currently leading, 0 otherwise",
+	})
 )
 
 func register(r prometheus.Registerer) {
-	r.MustRegister(usersTotal, usersAuthorized, usersActive, usersActivePerVLAN, usersAuthorizedPerVLAN, usersActivePerSwitch)
+	r.MustRegister(usersTotal, usersAuthorized, usersActive, usersActivePerVLAN, usersAuthorizedPerVLAN, usersActivePerSwitch,
+		leader)
+}
+
+// SetLeader records whether this replica currently leads (runs the jobs and the Discord bot).
+func SetLeader(leading bool) {
+	if leading {
+		leader.Set(1)
+	} else {
+		leader.Set(0)
+	}
 }
 
 // sample samples all metrics once. A failing query is logged and only leaves its own metric stale.

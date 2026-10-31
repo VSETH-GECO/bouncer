@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"time"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
-	"github.com/VSETH-GECO/bouncer/internal/election"
 	"github.com/VSETH-GECO/bouncer/internal/freeradius"
 	"github.com/VSETH-GECO/bouncer/internal/jobs"
 	"github.com/VSETH-GECO/bouncer/internal/kea"
@@ -242,7 +242,8 @@ func (c *JobController) work(ctx context.Context) error {
 
 // Spin loops over the work queue until ctx is cancelled, then returns ctx.Err()
 func (c *JobController) Spin(ctx context.Context) error {
-	slog.Info("Entering main poll loop", "node", election.NodeID())
+	host, _ := os.Hostname()
+	slog.Info("Entering main poll loop", "host", host)
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()

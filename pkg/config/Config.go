@@ -114,7 +114,7 @@ func (l *Loader) RegisterGlobalFlags(fs *pflag.FlagSet) {
 
 // RegisterRunFlags registers the run command's flags on fs.
 func (l *Loader) RegisterRunFlags(fs *pflag.FlagSet) {
-	fs.BoolP("leader-elect", "l", true, "Use leader-election via SQL database")
+	fs.BoolP("leader-elect", "l", true, "Elect the leader through a Kubernetes lease (needs the in-cluster configuration)")
 	l.bind(fs, "leader-elect")
 	// Shadows the root --switch-secret on run (keeping its -s shorthand and help text); both feed the same key.
 	fs.StringP("switch-secret", "s", "", "Secret to use when authenticating to switches")

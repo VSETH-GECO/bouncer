@@ -112,3 +112,15 @@ func TestSample_FailedQueryKeepsValues(t *testing.T) {
 		t.Errorf("usersActivePerSwitch has %d children, want 1", n)
 	}
 }
+
+func TestSetLeader(t *testing.T) {
+	t.Cleanup(func() { SetLeader(false) })
+	SetLeader(true)
+	if v := gaugeValue(t, leader); v != 1 {
+		t.Fatalf("bouncer_leader = %v after SetLeader(true), want 1", v)
+	}
+	SetLeader(false)
+	if v := gaugeValue(t, leader); v != 0 {
+		t.Fatalf("bouncer_leader = %v after SetLeader(false), want 0", v)
+	}
+}

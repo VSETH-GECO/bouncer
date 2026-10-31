@@ -16,7 +16,6 @@ import (
 // Tables is the allowlist of tables code is generated for, sorted. The database also holds FreeRADIUS and Kea tables
 // bouncer never touches; skipping them keeps the generated tree small and avoids Kea tables the generator rejects.
 var Tables = []string{
-	"bouncer_election",
 	"bouncer_jobs",
 	"bouncer_log",
 	"bouncer_switch_ip",

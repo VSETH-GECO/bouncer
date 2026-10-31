@@ -35,6 +35,10 @@ go build -o bouncer ./cmd/bouncer
 
 The container image is built from the `Dockerfile`.
 
+## Deployment
+
+bouncer runs with two replicas in Kubernetes. They elect a leader through the lease `bouncer` (`coordination.k8s.io`) in the pod's namespace, using the in-cluster configuration, `POD_NAMESPACE` and `POD_NAME`; the service account needs get/list/watch/create/update/patch on leases. Only the leader processes jobs and runs the Discord bot; when it loses the lease it exits and is restarted as a follower, and on shutdown it releases the lease so the other replica takes over within seconds. Every replica serves `/metrics` (`bouncer_leader` is 1 on the leader). To run a single instance locally, outside Kubernetes, pass `--leader-elect=false`.
+
 ## Running the tests
 
 The integration tests need Docker. `go test ./...` starts one MySQL 8.0.36 container per run, shared by all test packages and removed by testcontainers' reaper shortly after the run ends. Without Docker the integration tests are skipped; with `CI=1` set that is a failure instead. Tests that insert random rows log their seed: rerun with `TESTGEN_SEED=<seed>` to reproduce them.
