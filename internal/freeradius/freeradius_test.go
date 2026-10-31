@@ -374,3 +374,90 @@ func TestOpenSessions_UnparsableVLAN(t *testing.T) {
 	}
 	t.Error("session missing")
 }
+
+// acceptOf returns a mod that makes a post-auth row an accept of m at at.
+func acceptOf(m mac.MAC, at time.Time) func(*model.Radpostauth) {
+	return func(r *model.Radpostauth) { r.Username, r.Pass, r.Authdate = m.Hex(), m.Hex(), at }
+}
+
+// acceptsOf returns the entries of accepts belonging to one of users, in their order.
+func acceptsOf(accepts []freeradius.Accept, users ...string) []freeradius.Accept {
+	var mine []freeradius.Accept
+	for _, a := range accepts {
+		for _, u := range users {
+			if a.RawMAC == u {
+				mine = append(mine, a)
+			}
+		}
+	}
+	return mine
+}
+
+func TestLatestAccepts(t *testing.T) {
+	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
+	now := time.Now().UTC().Truncate(time.Second)
+	since := now.Add(-30 * time.Minute)
+	a, b, rejected, noSwitch, old := p.MAC(), p.MAC(), p.MAC(), p.MAC(), p.MAC()
+	p.Authorized(a, 20)
+	p.Authorized(rejected, 21)
+	p.Authorized(noSwitch, 22)
+	p.Authorized(old, 23)
+
+	p.Accept(acceptOf(a, now.Add(-10*time.Minute)))
+	newer := p.Accept(acceptOf(a, now.Add(-time.Minute)))
+	onB := p.Accept(acceptOf(b, now.Add(-5*time.Minute)))
+	p.Accept(acceptOf(rejected, now.Add(-2*time.Minute)), func(r *model.Radpostauth) { r.Reply = "Access-Reject" })
+	p.Accept(acceptOf(noSwitch, now.Add(-2*time.Minute)), func(r *model.Radpostauth) { r.Nasipaddress = nil })
+	p.Accept(acceptOf(old, since.Add(-time.Second)))
+
+	accepts, err := freeradius.LatestAccepts(ctx, q, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := acceptsOf(accepts, a.Hex(), b.Hex(), rejected.Hex(), noSwitch.Hex(), old.Hex())
+	if len(got) != 2 {
+		t.Fatalf("got %+v, want exactly the accepts of %s and %s", got, a.Hex(), b.Hex())
+	}
+
+	replyVLAN := func(r model.Radpostauth) int {
+		v, err := strconv.Atoi(*r.Vlan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	check := func(name string, got freeradius.Accept, m mac.MAC, row model.Radpostauth, assigned int) {
+		t.Helper()
+		if got.MAC != m || got.RawMAC != m.Hex() || !got.At.Equal(row.Authdate) ||
+			!got.SwitchIP.Equal(net.ParseIP(*row.Nasipaddress)) || got.SwitchPort == nil ||
+			*got.SwitchPort != *row.Nasportid || got.ReplyVLAN != replyVLAN(row) || got.AssignedVLAN != assigned {
+			t.Errorf("%s: got %+v, want MAC %v at %v on %s port %s, reply VLAN %s, assigned VLAN %d", name, got, m,
+				row.Authdate, *row.Nasipaddress, *row.Nasportid, *row.Vlan, assigned)
+		}
+	}
+	check("newest first, newest accept of a", got[0], a, newer, 20)
+	check("accept without radreply", got[1], b, onB, 0)
+}
+
+func TestLatestAccepts_Unparsable(t *testing.T) {
+	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
+	row := p.Accept(func(r *model.Radpostauth) {
+		r.Username, r.Vlan = "not-a-mac", ptr("guest")
+	})
+
+	accepts, err := freeradius.LatestAccepts(ctx, q, time.Now().Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := acceptsOf(accepts, "not-a-mac")
+	if len(got) != 1 {
+		t.Fatalf("got %+v, want one accept of not-a-mac", got)
+	}
+	if !got[0].MAC.IsZero() || got[0].ReplyVLAN != 0 || !got[0].SwitchIP.Equal(net.ParseIP(*row.Nasipaddress)) {
+		t.Errorf("got %+v, want a zero MAC, ReplyVLAN 0 and switch %s", got[0], *row.Nasipaddress)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

@@ -26,6 +26,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -238,6 +239,30 @@ func (g *Gen) Session(mods ...func(*model.Radacct)) model.Radacct {
 		mod(&row)
 	}
 	row.Radacctid = g.exec("radacct", table.Radacct.INSERT(table.Radacct.MutableColumns).MODEL(row))
+	return row
+}
+
+// Accept builds a FreeRADIUS post-auth row (radpostauth) of an Access-Accept with the switch, port, calling station
+// and reply VLAN columns set, applies mods in order, inserts it and returns it with ID filled in.
+func (g *Gen) Accept(mods ...func(*model.Radpostauth)) model.Radpostauth {
+	g.t.Helper()
+	m := g.MAC()
+	user := m.Hex()
+	row := model.Radpostauth{
+		Username:         user,
+		Pass:             user,
+		Reply:            "Access-Accept",
+		Authdate:         now(),
+		Class:            "",
+		Nasipaddress:     ptr(g.IPv4().String()),
+		Nasportid:        ptr(fmt.Sprintf("GigabitEthernet1/0/%d", g.between(1, 48))),
+		Callingstationid: ptr(strings.ToUpper(strings.ReplaceAll(m.String(), ":", "-"))),
+		Vlan:             ptr(strconv.Itoa(g.between(2, 4094))),
+	}
+	for _, mod := range mods {
+		mod(&row)
+	}
+	row.ID = int32(g.exec("radpostauth", table.Radpostauth.INSERT(table.Radpostauth.MutableColumns).MODEL(row)))
 	return row
 }
 

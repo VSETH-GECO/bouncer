@@ -36,6 +36,7 @@ func TestPersistent_RowsAreReadable(t *testing.T) {
 	p := testgen.Persistent(t, q)
 
 	s := p.Session()
+	a := p.Accept()
 	l := p.LoginLog()
 	j := p.Job()
 	v := p.VLAN()
@@ -49,6 +50,7 @@ func TestPersistent_RowsAreReadable(t *testing.T) {
 		cond mysql.BoolExpression
 	}{
 		{"radacct", s.Radacctid, table.Radacct, table.Radacct.Radacctid.EQ(mysql.Int64(s.Radacctid))},
+		{"radpostauth", int64(a.ID), table.Radpostauth, table.Radpostauth.ID.EQ(mysql.Int32(a.ID))},
 		{"login_logs", int64(l.ID), table.LoginLogs, table.LoginLogs.ID.EQ(mysql.Int32(l.ID))},
 		{"bouncer_jobs", int64(j.ID), table.BouncerJobs, table.BouncerJobs.ID.EQ(mysql.Int32(j.ID))},
 		{"bouncer_vlan", int64(v.ID), table.BouncerVlan, table.BouncerVlan.ID.EQ(mysql.Int32(v.ID))},
