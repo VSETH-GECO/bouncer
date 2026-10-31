@@ -2,10 +2,16 @@
 // login VLAN.
 //
 // A client that moves to another switch without logging out is authenticated there and handed its assigned VLAN,
-// which the new switch may not carry; it then has no network and cannot reach the login portal. Each round of the
-// reconciliation loop compares every open RADIUS session with the event VLANs of its switch and, unless the
-// Reconciler runs dry, queues a job moving each stuck client to the login VLAN. The job loop then does the CoA, the
-// lease cleanup and the log row, as for any other job.
+// which the new switch may not carry; it then has no network and cannot reach the login portal. Such a client never
+// gets a RADIUS accounting session: the switch cannot place it, so no Accounting-Start follows the Access-Accept and
+// radacct never shows it. What it does leave is a row in FreeRADIUS's post-auth log (radpostauth) for every
+// authentication, naming the switch and the VLAN the switch was told, and it keeps re-authenticating.
+//
+// Each round of the reconciliation loop takes every client's newest Access-Accept within the accept window,
+// compares the client's current assigned VLAN with the event VLANs of that accept's switch and, unless the
+// Reconciler runs dry, queues a job moving each stuck client to the login VLAN. The job loop then rewrites radreply
+// and clears the leases, as for any other job, and the switch's next authentication of the client lands it in the
+// login VLAN.
 package reconcile
 
 import (
@@ -31,6 +37,9 @@ const (
 	// cooldown is how long after a client's last job (by its last_update) the loop waits before queueing another,
 	// so a client the job loop cannot fix is retried every cooldown and not every round.
 	cooldown = 10 * time.Minute
+	// acceptWindow is how recent a client's newest Access-Accept must be for the client to be judged. A client
+	// whose last accept is older has probably left; bouncing it would only log out an absent user.
+	acceptWindow = 30 * time.Minute
 )
 
 // Log messages, shared with the tests.
@@ -44,7 +53,7 @@ const (
 var (
 	stuckClients = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "bouncer_stuck_clients",
-		Help: "Clients with an open session on a switch that does not carry their assigned VLAN",
+		Help: "Clients whose newest recent Access-Accept came from a switch that does not carry their assigned VLAN",
 	})
 	stuckBounces = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "bouncer_stuck_bounces_total",
@@ -77,10 +86,9 @@ func New(q db.Querier, dryRun bool) *Reconciler {
 
 // stuckClient is a client found stuck in a round.
 type stuckClient struct {
-	mac      mac.MAC
-	assigned int
-	sw       switches.Switch
-	switchIP net.IP
+	mac    mac.MAC
+	sw     switches.Switch
+	accept freeradius.Accept
 }
 
 // switchLookup is the outcome of resolving one switch IP within a round.
@@ -93,9 +101,12 @@ type switchLookup struct {
 // being stuck, updates bouncer_stuck_clients and, unless the Reconciler runs dry, queues a job moving each stuck
 // client to the login VLAN, skipping a client with a pending job or one updated within the cool-down.
 //
-// Only a client's newest open session counts: an older one still open is a leftover of a lost Accounting-Stop. A
-// failing session query or switch lookup fails the round before any state changes; a failing job lookup or insert is
-// logged and the round goes on with the next client.
+// A client is stuck when its newest Access-Accept within the accept window came from a switch of the switch map that
+// has event VLANs, none of which is the client's current assigned VLAN from radreply. The current VLAN is used, not
+// the one the accept told the switch, so that an admin's re-patch to a VLAN the switch carries is left to the
+// client's next authentication instead of being overridden. Clients without a radreply VLAN or in the login VLAN are
+// skipped. A failing accept query or switch lookup fails the round before any state changes; a failing job lookup or
+// insert is logged and the round goes on with the next client.
 func (r *Reconciler) Round(ctx context.Context) error {
 	found, err := r.find(ctx)
 	if err != nil {
@@ -106,8 +117,13 @@ func (r *Reconciler) Round(ctx context.Context) error {
 	for _, c := range found {
 		next[c.mac] = struct{}{}
 		if _, was := r.stuck[c.mac]; !was {
-			slog.Info(msgStuck, "clientMAC", c.mac.Hex(), "switch", c.sw.Hostname, "switchIP", c.switchIP.String(),
-				"assignedVLAN", c.assigned, "dryRun", r.dryRun)
+			attrs := []any{"clientMAC", c.mac.Hex(), "switch", c.sw.Hostname, "switchIP", c.accept.SwitchIP.String()}
+			if c.accept.SwitchPort != nil {
+				attrs = append(attrs, "switchPort", *c.accept.SwitchPort)
+			}
+			attrs = append(attrs, "assignedVLAN", c.accept.AssignedVLAN, "replyVLAN", c.accept.ReplyVLAN,
+				"lastAccept", time.Since(c.accept.At).Round(time.Second), "dryRun", r.dryRun)
+			slog.Info(msgStuck, attrs...)
 		}
 	}
 	for m := range r.stuck {
@@ -130,9 +146,9 @@ func (r *Reconciler) Round(ctx context.Context) error {
 	return nil
 }
 
-// find returns the stuck clients, in the order of their newest open session (newest first).
+// find returns the stuck clients, in the order of their newest accept (newest first).
 func (r *Reconciler) find(ctx context.Context) ([]stuckClient, error) {
-	sessions, err := freeradius.OpenSessions(ctx, r.q)
+	accepts, err := freeradius.LatestAccepts(ctx, r.q, time.Now().Add(-acceptWindow))
 	if err != nil {
 		return nil, err
 	}
@@ -141,25 +157,25 @@ func (r *Reconciler) find(ctx context.Context) ([]stuckClient, error) {
 	noVLANs := map[int]struct{}{}
 	seen := map[mac.MAC]struct{}{}
 	var found []stuckClient
-	for _, s := range sessions {
+	for _, a := range accepts {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if s.MAC.IsZero() {
+		if a.MAC.IsZero() {
 			continue
 		}
-		if _, dup := seen[s.MAC]; dup {
-			continue // sessions come newest first
+		if _, dup := seen[a.MAC]; dup {
+			continue // accepts come newest first; two usernames may spell the same MAC
 		}
-		seen[s.MAC] = struct{}{}
-		if s.AssignedVLAN == 0 || s.AssignedVLAN == loginVLAN {
+		seen[a.MAC] = struct{}{}
+		if a.AssignedVLAN == 0 || a.AssignedVLAN == loginVLAN {
 			continue
 		}
 
-		key := s.SwitchIP.String()
+		key := a.SwitchIP.String()
 		l, done := lookups[key]
 		if !done {
-			l, err = r.lookup(ctx, s.SwitchIP)
+			l, err = r.lookup(ctx, a.SwitchIP)
 			if err != nil {
 				return nil, err
 			}
@@ -175,9 +191,9 @@ func (r *Reconciler) find(ctx context.Context) ([]stuckClient, error) {
 		if !l.known || len(l.sw.VLANs) == 0 {
 			continue
 		}
-		carried := slices.ContainsFunc(l.sw.VLANs, func(v switches.VLAN) bool { return v.VLANID == s.AssignedVLAN })
+		carried := slices.ContainsFunc(l.sw.VLANs, func(v switches.VLAN) bool { return v.VLANID == a.AssignedVLAN })
 		if !carried {
-			found = append(found, stuckClient{mac: s.MAC, assigned: s.AssignedVLAN, sw: l.sw, switchIP: s.SwitchIP})
+			found = append(found, stuckClient{mac: a.MAC, sw: l.sw, accept: a})
 		}
 	}
 	r.noVLANs = noVLANs
@@ -191,7 +207,7 @@ func (r *Reconciler) lookup(ctx context.Context, ip net.IP) (switchLookup, error
 	case err == nil:
 		return switchLookup{sw: sw, known: true}, nil
 	case errors.Is(err, db.ErrNotFound):
-		slog.Debug("Skipping sessions on a switch missing from the switch map", "switchIP", ip.String())
+		slog.Debug("Skipping accepts from a switch missing from the switch map", "switchIP", ip.String())
 		return switchLookup{}, nil
 	default:
 		return switchLookup{}, fmt.Errorf("resolving switch %s: %w", ip, err)

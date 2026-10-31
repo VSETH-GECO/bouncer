@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"strconv"
 	"time"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
@@ -92,55 +91,4 @@ func FindMAC(ctx context.Context, q db.Querier, value string) (mac.MAC, error) {
 	}
 
 	return mac.MAC{}, fmt.Errorf("no RADIUS session matches %q: %w", value, db.ErrNotFound)
-}
-
-// OpenSession is an open RADIUS session (no stop time) together with the VLAN its client is assigned to.
-type OpenSession struct {
-	// MAC is the client; it is zero when the session's username is not a MAC, which RawMAC then holds.
-	MAC    mac.MAC
-	RawMAC string
-	// SessionID is the accounting session ID.
-	SessionID string
-	// SwitchIP is the switch (NAS) the session runs on; nil if the stored address does not parse.
-	SwitchIP net.IP
-	// AssignedVLAN is the client's VLAN from radreply; 0 when it has none or the stored value does not parse.
-	AssignedVLAN int
-}
-
-// OpenSessions returns every open session with its client's assigned VLAN, in one query, newest start first.
-func OpenSessions(ctx context.Context, q db.Querier) ([]OpenSession, error) {
-	var rows []struct {
-		Username      string
-		Acctsessionid string
-		Nasipaddress  string
-		Vlan          *string
-	}
-	ra, rr := table.Radacct, table.Radreply
-	err := mysql.SELECT(
-		ra.Username.AS("username"),
-		ra.Acctsessionid.AS("acctsessionid"),
-		ra.Nasipaddress.AS("nasipaddress"),
-		rr.Value.AS("vlan"),
-	).
-		FROM(ra.LEFT_JOIN(rr, rr.Username.EQ(ra.Username).AND(rr.Attribute.EQ(mysql.String(AttrVLAN))))).
-		WHERE(ra.Acctstoptime.IS_NULL()).
-		ORDER_BY(ra.Acctstarttime.DESC(), ra.Radacctid.DESC()).
-		QueryContext(ctx, q, &rows)
-	if err != nil {
-		return nil, fmt.Errorf("querying open RADIUS sessions: %w", err)
-	}
-	sessions := make([]OpenSession, 0, len(rows))
-	for _, r := range rows {
-		s := OpenSession{RawMAC: r.Username, SessionID: r.Acctsessionid, SwitchIP: net.ParseIP(r.Nasipaddress)}
-		if m, err := mac.Parse(r.Username); err == nil {
-			s.MAC = m
-		}
-		if r.Vlan != nil {
-			if vlan, err := strconv.Atoi(*r.Vlan); err == nil {
-				s.AssignedVLAN = vlan
-			}
-		}
-		sessions = append(sessions, s)
-	}
-	return sessions, nil
 }
