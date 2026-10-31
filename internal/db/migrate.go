@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -12,7 +13,6 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	mysqlDriver "github.com/golang-migrate/migrate/v4/database/mysql"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
-	log "github.com/sirupsen/logrus"
 )
 
 // newMigrator builds a migrator over the embedded migrations and a connection of its own taken from the pool. The
@@ -113,11 +113,7 @@ func (d *DB) CheckVersion(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	entry := log.WithFields(log.Fields{
-		"latestVersion": latestVersion,
-		"version":       version,
-		"dirty":         dirty,
-	})
+	entry := slog.With("latestVersion", latestVersion, "version", version, "dirty", dirty)
 	if latestVersion == version {
 		entry.Debug("Database version is matching newest version at build time")
 	} else if latestVersion > version {

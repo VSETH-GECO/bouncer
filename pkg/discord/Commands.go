@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
-	log "github.com/sirupsen/logrus"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/freeradius"
@@ -26,7 +26,7 @@ const (
 func (d *Discord) migrateCommands(ctx context.Context, s *discordgo.Session) error {
 	version, err := commandVersion(ctx, d.db.Querier())
 	if errors.Is(err, db.ErrNotFound) {
-		log.Warn("No previous discord migration entry found, assuming a fresh start")
+		slog.Warn("No previous discord migration entry found, assuming a fresh start")
 		version = 0
 	} else if err != nil {
 		return err
@@ -150,7 +150,7 @@ func (d *Discord) migrateCommandsTx(ctx context.Context, tx db.Querier, s *disco
 // respond sends an interaction response and logs a failure to do so. what names the reply in the log message.
 func respond(s *discordgo.Session, i *discordgo.InteractionCreate, response *discordgo.InteractionResponse, what string) {
 	if err := s.InteractionRespond(i.Interaction, response); err != nil {
-		log.WithError(err).Warn("Error during discord reply: '" + what + "'")
+		slog.Warn("Error during discord reply: '"+what+"'", "error", err)
 	}
 }
 
@@ -180,10 +180,7 @@ func (d *Discord) handleUserSubcommand(s *discordgo.Session, i *discordgo.Intera
 	var user = i.Interaction.Member.User
 
 	if !d.IsAuthorized(user.ID) {
-		log.WithFields(log.Fields{
-			"id":   user.ID,
-			"name": user.Username,
-		}).Info("Unauthorized access to command blocked")
+		slog.Info("Unauthorized access to command blocked", "id", user.ID, "name", user.Username)
 		return
 	}
 
@@ -208,7 +205,7 @@ func (d *Discord) handleUserSubcommand(s *discordgo.Session, i *discordgo.Intera
 
 	userCard, err := d.dc.GetDiscordUserCard(d.ctx, searchString, true, isPatchCommand)
 	if err != nil {
-		log.WithError(err).WithField("search", searchString).Warn("User query failed")
+		slog.Warn("User query failed", "error", err, "search", searchString)
 		respondMessage(s, i, "User query failed - check logs for more details", "user query failed")
 		return
 	}
@@ -221,10 +218,7 @@ func (d *Discord) handlePatchSubcommand(s *discordgo.Session, i *discordgo.Inter
 	var user = i.Interaction.Member.User
 
 	if !d.IsAuthorized(user.ID) {
-		log.WithFields(log.Fields{
-			"id":   user.ID,
-			"name": user.Username,
-		}).Info("Unauthorized access to command blocked")
+		slog.Info("Unauthorized access to command blocked", "id", user.ID, "name", user.Username)
 		return
 	}
 
@@ -271,10 +265,7 @@ func (d *Discord) handleCardButton(s *discordgo.Session, i *discordgo.Interactio
 
 		message = "**VLAN change queued**"
 		if err := d.queueVLANChange(d.ctx, cachedMAC, targetVLAN); err != nil {
-			log.WithError(err).WithFields(log.Fields{
-				"mac":        cachedMAC,
-				"targetVLAN": targetVLAN,
-			}).Warn("VLAN change request failed")
+			slog.Warn("VLAN change request failed", "error", err, "mac", cachedMAC, "targetVLAN", targetVLAN)
 			message = "***VLAN change failed!***"
 		}
 	}
@@ -282,7 +273,7 @@ func (d *Discord) handleCardButton(s *discordgo.Session, i *discordgo.Interactio
 	// Also, lets update the user card so that stuff is disabled...
 	card, err := d.dc.GetDiscordUserCard(d.ctx, cachedMAC, false, false)
 	if err != nil {
-		log.WithError(err).WithField("mac", cachedMAC).Warn("Error during discord card update")
+		slog.Warn("Error during discord card update", "error", err, "mac", cachedMAC)
 		respondMessage(s, i, "\n"+message+"\n\nUser card update failed - check logs for more details", "card update failed")
 		return
 	}

@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
@@ -12,7 +13,6 @@ import (
 	"github.com/VSETH-GECO/bouncer/pkg/controller"
 	"github.com/VSETH-GECO/bouncer/pkg/discord"
 	"github.com/VSETH-GECO/bouncer/pkg/radius"
-	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -28,7 +28,7 @@ func ExecCommand(ctx context.Context, cfg config.Config) error {
 	}
 	defer func() {
 		if err := d.Close(); err != nil {
-			log.WithError(err).Warn("Couldn't close database connection")
+			slog.Warn("Couldn't close database connection", "error", err)
 		}
 	}()
 
@@ -43,7 +43,7 @@ func ExecCommand(ctx context.Context, cfg config.Config) error {
 	group, groupCtx := errgroup.WithContext(runCtx)
 
 	if cfg.Run.LeaderElect {
-		log.Info("Attempting to acquire leader lock")
+		slog.Info("Attempting to acquire leader lock")
 		lock := election.New(d)
 		if err := lock.EnsureLock(ctx, leaderLockID); err != nil {
 			return fmt.Errorf("acquiring leader lock: %w", err)
@@ -53,9 +53,9 @@ func ExecCommand(ctx context.Context, cfg config.Config) error {
 			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := lock.Release(releaseCtx, leaderLockID); err != nil {
-				log.WithError(err).Warn("Couldn't release lock on shutdown!")
+				slog.Warn("Couldn't release lock on shutdown!", "error", err)
 			} else {
-				log.Info("Leader lock released")
+				slog.Info("Leader lock released")
 			}
 		}()
 		// Losing the lock stops the whole daemon, so that another replica can take over
@@ -83,7 +83,7 @@ func ExecCommand(ctx context.Context, cfg config.Config) error {
 	}
 	defer func() {
 		if err := bot.Close(); err != nil {
-			log.WithError(err).Warn("Couldn't close discord session")
+			slog.Warn("Couldn't close discord session", "error", err)
 		}
 	}()
 

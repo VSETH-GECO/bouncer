@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"time"
 
@@ -15,7 +16,6 @@ import (
 	"github.com/VSETH-GECO/bouncer/pkg/radius"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -109,11 +109,8 @@ func (c *JobController) ProcessMoveVLANJob(ctx context.Context, job *jobs.Job) e
 
 		// I'm not sure if you want this, so let's log that case
 		if oldVlan == job.TargetVLAN {
-			log.WithFields(log.Fields{
-				"job.Id":         job.ID,
-				"job.ClientMac":  job.MAC.Hex(),
-				"job.TargetVLAN": job.TargetVLAN,
-			}).Warn("Got request to move to same vlan, silently discarding this ;-)")
+			slog.Warn("Got request to move to same vlan, silently discarding this ;-)",
+				"job.Id", job.ID, "job.ClientMac", job.MAC.Hex(), "job.TargetVLAN", job.TargetVLAN)
 			useless = true
 			return jobs.Delete(ctx, tx, job.ID)
 		}
@@ -179,20 +176,20 @@ func (c *JobController) ProcessMoveVLANJob(ctx context.Context, job *jobs.Job) e
 		return nil
 	}
 
-	fields := log.Fields{
-		"job.Id":         job.ID,
-		"job.ClientMac":  job.MAC.Hex(),
-		"oldVLAN":        oldVlan,
-		"job.TargetVLAN": job.TargetVLAN,
-		"retries":        job.Retries,
+	fields := []any{
+		"job.Id", job.ID,
+		"job.ClientMac", job.MAC.Hex(),
+		"oldVLAN", oldVlan,
+		"job.TargetVLAN", job.TargetVLAN,
+		"retries", job.Retries,
 	}
 	if hostname != nil {
-		fields["hostname"] = *hostname
+		fields = append(fields, "hostname", *hostname)
 	}
 	if oldIP != nil {
-		fields["oldIP"] = oldIP.String()
+		fields = append(fields, "oldIP", oldIP.String())
 	}
-	log.WithFields(fields).Info("VLAN move successful")
+	slog.Info("VLAN move successful", fields...)
 	return nil
 }
 
@@ -209,11 +206,7 @@ func (c *JobController) work(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		l := log.WithFields(log.Fields{
-			"id":         job.ID,
-			"clientMAC":  job.RawMAC,
-			"targetVLAN": job.TargetVLAN,
-		})
+		l := slog.With("id", job.ID, "clientMAC", job.RawMAC, "targetVLAN", job.TargetVLAN)
 		l.Info("Processing")
 		opsProcessed.Inc()
 
@@ -221,9 +214,9 @@ func (c *JobController) work(ctx context.Context) error {
 			// A row whose MAC can't be parsed can never succeed; count it as a failed attempt so that it eventually
 			// drops out of the queue.
 			job.Retries++
-			l.WithField("retries", job.Retries).Warnf("Processing job failed: malformed client MAC %q", job.RawMAC)
+			l.Warn(fmt.Sprintf("Processing job failed: malformed client MAC %q", job.RawMAC), "retries", job.Retries)
 			if err := jobs.SetRetries(ctx, c.db.Querier(), job.ID, job.Retries); err != nil {
-				l.WithError(err).Warn("Couldn't update job error counter!")
+				l.Warn("Couldn't update job error counter!", "error", err)
 			}
 			continue
 		}
@@ -239,9 +232,9 @@ func (c *JobController) work(ctx context.Context) error {
 		}
 
 		job.Retries++
-		l.WithError(err).WithField("retries", job.Retries).Warn("Processing job failed")
+		l.Warn("Processing job failed", "error", err, "retries", job.Retries)
 		if err := jobs.SetRetries(ctx, c.db.Querier(), job.ID, job.Retries); err != nil {
-			l.WithError(err).Warn("Couldn't update job error counter!")
+			l.Warn("Couldn't update job error counter!", "error", err)
 		}
 	}
 	return nil
@@ -249,7 +242,7 @@ func (c *JobController) work(ctx context.Context) error {
 
 // Spin loops over the work queue until ctx is cancelled, then returns ctx.Err()
 func (c *JobController) Spin(ctx context.Context) error {
-	log.WithField("node", election.NodeID()).Info("Entering main poll loop")
+	slog.Info("Entering main poll loop", "node", election.NodeID())
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -258,7 +251,7 @@ func (c *JobController) Spin(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			log.WithError(err).Warn("poll loop iteration failed")
+			slog.Warn("poll loop iteration failed", "error", err)
 		}
 
 		select {

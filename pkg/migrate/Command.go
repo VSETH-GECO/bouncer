@@ -3,10 +3,10 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/pkg/config"
-	log "github.com/sirupsen/logrus"
 )
 
 // RunCommand applies all pending database migrations
@@ -17,7 +17,7 @@ func RunCommand(ctx context.Context, cfg config.Config) error {
 	}
 	defer func() {
 		if err := d.Close(); err != nil {
-			log.WithError(err).Warn("Couldn't close database connection")
+			slog.Warn("Couldn't close database connection", "error", err)
 		}
 	}()
 

@@ -5,11 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/olekukonko/tablewriter"
-	log "github.com/sirupsen/logrus"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/freeradius"
@@ -104,7 +104,7 @@ func (dc *DiscordController) GetDiscordUserCard(ctx context.Context, searchStrin
 
 		switchObj, err := switches.ByIP(ctx, dc.db.Querier(), user.Sessions[0].SwitchIP)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
-			log.WithError(err).Warn("Switch lookup failed")
+			slog.Warn("Switch lookup failed", "error", err)
 		}
 		if err == nil {
 			extraFields = []*discordgo.MessageEmbedField{
@@ -210,7 +210,7 @@ func (dc *DiscordController) renderLastSessions(ctx context.Context, buf *bytes.
 		case err == nil:
 			switchName = mySwitch.Hostname + " (" + derefOr(mySwitch.Location, "") + ")"
 		case !errors.Is(err, db.ErrNotFound):
-			log.WithError(err).Warn("Switch lookup failed")
+			slog.Warn("Switch lookup failed", "error", err)
 		}
 
 		row := []string{
@@ -233,14 +233,14 @@ func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard
 	availableVLANs := dc.collectAvailableVLANs(ctx, user, buttonsEnabled)
 	vlansMissing := availableVLANs == nil
 	if vlansMissing {
-		log.Debug("no vlan available")
+		slog.Debug("no vlan available")
 	}
 
 	// Actions!
 	var actions []discordgo.MessageComponent
 	if vlan > 0 && vlan != 499 {
 		// User is logged in ... so we can log them out or change their VLAN
-		log.Debug("adding 'logout button' to action menu")
+		slog.Debug("adding 'logout button' to action menu")
 		actions = append(actions, discordgo.Button{
 			Label:    "Logout",
 			Style:    discordgo.DangerButton,
@@ -251,7 +251,7 @@ func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard
 			CustomID: "findLogoutBtn",
 		})
 		if !vlansMissing {
-			log.Debug("adding 'change vlan' button to action menu")
+			slog.Debug("adding 'change vlan' button to action menu")
 			actions = append(actions, discordgo.Button{
 				Label:    "Change VLAN",
 				Style:    discordgo.PrimaryButton,
@@ -264,7 +264,7 @@ func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard
 		}
 	} else if len(user.Sessions) > 0 && !vlansMissing {
 		// User is not even logged in, but we at least have a session
-		log.Debug("adding 'login' button to action menu")
+		slog.Debug("adding 'login' button to action menu")
 		actions = append(actions, discordgo.Button{
 			Label:    "Login",
 			Style:    discordgo.SuccessButton,
@@ -278,7 +278,7 @@ func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard
 
 	if !vlansMissing {
 		card.Components = append(card.Components, availableVLANs)
-		log.Debug("adding 'cancel' button to action menu")
+		slog.Debug("adding 'cancel' button to action menu")
 		actions = append(actions, discordgo.Button{
 			Label:    "Cancel",
 			Style:    discordgo.SecondaryButton,
@@ -302,15 +302,15 @@ func (dc *DiscordController) collectAvailableVLANs(ctx context.Context, user *Us
 	switchIP := user.Sessions[0].SwitchIP
 	switchRef, err := switches.ByIP(ctx, dc.db.Querier(), switchIP)
 	if errors.Is(err, db.ErrNotFound) {
-		log.WithField("ip", switchIP.String()).Warn("Unknown switch returned from RADIUS query!")
+		slog.Warn("Unknown switch returned from RADIUS query!", "ip", switchIP.String())
 		return nil
 	}
 	if err != nil {
-		log.WithError(err).Warn("Switch lookup failed")
+		slog.Warn("Switch lookup failed", "error", err)
 		return nil
 	}
 
-	log.Debug("crafting vlan menu")
+	slog.Debug("crafting vlan menu")
 	var vlanMenu []discordgo.SelectMenuOption
 	for _, vlan := range switchRef.VLANs {
 		isDefault := switchRef.PrimaryVLAN != nil && switchRef.PrimaryVLAN.VLANID == vlan.VLANID

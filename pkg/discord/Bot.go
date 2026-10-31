@@ -3,13 +3,13 @@ package discord
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/pkg/config"
 	"github.com/VSETH-GECO/bouncer/pkg/controller"
 	"github.com/bwmarrin/discordgo"
-	log "github.com/sirupsen/logrus"
 )
 
 // Discord provides a discord bot interface to this app
@@ -55,14 +55,14 @@ func NewDiscord(d *db.DB, cfg config.Discord) *Discord {
 // and Setup returns nil. Once Setup succeeded, call Close on shutdown.
 func (d *Discord) Setup(ctx context.Context) error {
 	if d.token == "" || d.guildId == "" || d.privateInfoChannel == "" || d.logChannel == "" {
-		log.Warning("Discord config missing or incomplete")
+		slog.Warn("Discord config missing or incomplete")
 		return nil
 	}
 
-	log.Info("Discord config detected, starting bot!")
-	log.Info("Authorized users: ")
+	slog.Info("Discord config detected, starting bot!")
+	slog.Info("Authorized users: ")
 	for _, user := range d.allowedUsers {
-		log.Info(user)
+		slog.Info(user)
 	}
 
 	d.ctx = ctx
@@ -90,10 +90,9 @@ func (d *Discord) Setup(ctx context.Context) error {
 
 	d.session = session
 	// Everything seems good
-	log.AddHook(&discordLogger{
-		s:          session,
-		logChannel: d.logChannel,
-	})
+	// Mirror Info and above into the log channel. Close leaves the handler installed; posting after the session is
+	// closed fails and is reported at Debug level.
+	slog.SetDefault(slog.New(newLogHandler(slog.Default().Handler(), session, d.logChannel)))
 	return nil
 }
 

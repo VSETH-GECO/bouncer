@@ -1,10 +1,11 @@
 package main
 
 import (
+	"log/slog"
+
 	"github.com/VSETH-GECO/bouncer/pkg/config"
 	"github.com/VSETH-GECO/bouncer/pkg/migrate"
 	"github.com/VSETH-GECO/bouncer/pkg/run"
-	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -27,7 +28,7 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 			if cfg.Verbose {
-				log.SetLevel(log.DebugLevel)
+				levelVar.Set(slog.LevelDebug)
 			}
 			return nil
 		},

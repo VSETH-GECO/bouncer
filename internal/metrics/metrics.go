@@ -3,13 +3,13 @@ package metrics
 
 import (
 	"context"
+	"log/slog"
 	"strconv"
 	"time"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/freeradius"
 	"github.com/prometheus/client_golang/prometheus"
-	log "github.com/sirupsen/logrus"
 )
 
 // The collectors are registered by Serve, not at init, so that importing this package has no side effects.
@@ -55,10 +55,10 @@ func register(r prometheus.Registerer) {
 
 // sample samples all metrics once. A failing query is logged and only leaves its own metric stale.
 func sample(ctx context.Context, q db.Querier) {
-	log.Debug("Updating prometheus metrics...")
+	slog.Debug("Updating prometheus metrics...")
 	warn := func(metric string, err error) {
 		if ctx.Err() == nil {
-			log.WithError(err).WithField("metric", metric).Warn("Couldn't update prometheus metric")
+			slog.Warn("Couldn't update prometheus metric", "error", err, "metric", metric)
 		}
 	}
 	setGauge := func(g prometheus.Gauge, name string, count func(context.Context, db.Querier) (int, error)) {
@@ -98,7 +98,7 @@ func sample(ctx context.Context, q db.Querier) {
 			usersActivePerSwitch.WithLabelValues(c.SwitchIP).Set(float64(c.Count))
 		}
 	}
-	log.Debug("Updating prometheus metrics done!")
+	slog.Debug("Updating prometheus metrics done!")
 }
 
 // runSampler samples immediately and then every few seconds until ctx is cancelled.

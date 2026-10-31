@@ -3,9 +3,9 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
-	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
@@ -144,11 +144,11 @@ func (l *Loader) Load() (Config, error) {
 	l.v.SetConfigName("config")
 	l.v.AddConfigPath("/etc/bouncer")
 	if location := l.v.GetString("config"); location != "" {
-		log.WithField("config", location).Info("Loading config from explicit location")
+		slog.Info("Loading config from explicit location", "config", location)
 		l.v.SetConfigFile(location)
 	}
 	if err := l.v.ReadInConfig(); err != nil {
-		log.WithError(err).Warn("Config load failed!")
+		slog.Warn("Config load failed!", "error", err)
 	}
 
 	var cfg Config

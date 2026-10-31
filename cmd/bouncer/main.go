@@ -3,14 +3,19 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
-
-	log "github.com/sirupsen/logrus"
 )
 
+// levelVar is the minimum level of the default logger; the root command raises it to Debug with --verbose.
+var levelVar slog.LevelVar
+
 func main() {
+	levelVar.Set(slog.LevelInfo)
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: &levelVar})))
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		// Restore default signal handling once a shutdown was requested, so that a second signal kills us right away
@@ -24,11 +29,11 @@ func main() {
 	stop()
 	if err != nil && shutdownRequested && errors.Is(err, context.Canceled) {
 		// We were asked to shut down, that's not an error
-		log.Info("Shutdown requested, exiting")
+		slog.Info("Shutdown requested, exiting")
 		return
 	}
 	if err != nil {
-		log.WithError(err).Error("bouncer failed")
+		slog.Error("bouncer failed", "error", err)
 		os.Exit(1)
 	}
 }

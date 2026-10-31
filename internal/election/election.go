@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"os"
 	"strconv"
@@ -14,7 +15,6 @@ import (
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/model"
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/table"
 	"github.com/go-jet/jet/v2/mysql"
-	log "github.com/sirupsen/logrus"
 )
 
 // expiredBefore matches lock rows that were not refreshed within the last 30 seconds.
@@ -30,7 +30,7 @@ type Lock struct {
 func NodeID() string {
 	host, err := os.Hostname()
 	if err != nil {
-		log.WithError(err).Warn("Couldn't determine hostname!")
+		slog.Warn("Couldn't determine hostname!", "error", err)
 	}
 	return host + "-" + strconv.Itoa(os.Getpid())
 }
@@ -147,7 +147,7 @@ func (l *Lock) KeepAlive(ctx context.Context, id int) error {
 		// Sanity check
 		actualNodeID, err := l.holder(ctx, id)
 		if errors.Is(err, db.ErrNotFound) {
-			log.Warn("Error checking my leader lock - empty result?")
+			slog.Warn("Error checking my leader lock - empty result?")
 			continue
 		}
 		if err != nil {
@@ -191,13 +191,9 @@ func (l *Lock) EnsureLock(ctx context.Context, id int) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		entry := log.WithFields(log.Fields{
-			"haveLock":   haveLock,
-			"id":         id,
-			"leaderName": leaderName,
-		})
+		entry := slog.With("haveLock", haveLock, "id", id, "leaderName", leaderName)
 		if err != nil {
-			entry.WithError(err).Warn("Didn't acquire lock")
+			entry.Warn("Didn't acquire lock", "error", err)
 		} else {
 			entry.Debug("Didn't acquire lock")
 		}
