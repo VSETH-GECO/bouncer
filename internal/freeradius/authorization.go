@@ -25,6 +25,9 @@ const (
 
 	// OpSet is the FreeRADIUS operator that sets an attribute, replacing any earlier value.
 	OpSet = ":="
+
+	// LoginVLAN is the VLAN of clients that are not logged in; from there they reach the login portal.
+	LoginVLAN = 499
 )
 
 // Authorize lets the client m onto the given VLAN, using its MAC as both username and password.
@@ -79,4 +82,24 @@ func SetVLAN(ctx context.Context, q db.Querier, m mac.MAC, vlan int) error {
 		return fmt.Errorf("updating radreply VLAN: %w", err)
 	}
 	return nil
+}
+
+// Assignment is a client's VLAN row in radreply, as stored.
+type Assignment struct{ Username, VLAN string }
+
+// Assignments returns the VLAN row of every authorized client.
+func Assignments(ctx context.Context, q db.Querier) ([]Assignment, error) {
+	var rows []model.Radreply
+	err := mysql.SELECT(table.Radreply.AllColumns).
+		FROM(table.Radreply).
+		WHERE(table.Radreply.Attribute.EQ(mysql.String(AttrVLAN))).
+		QueryContext(ctx, q, &rows)
+	if err != nil {
+		return nil, fmt.Errorf("querying VLAN assignments: %w", err)
+	}
+	out := make([]Assignment, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Assignment{Username: r.Username, VLAN: r.Value})
+	}
+	return out, nil
 }

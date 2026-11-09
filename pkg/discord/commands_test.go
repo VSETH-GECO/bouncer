@@ -20,8 +20,8 @@ func TestCommandDefinition(t *testing.T) {
 	if c.DefaultMemberPermissions == nil || *c.DefaultMemberPermissions != 0 {
 		t.Errorf("DefaultMemberPermissions = %v, want 0", c.DefaultMemberPermissions)
 	}
-	if len(c.Options) != 2 {
-		t.Fatalf("subcommands = %d, want 2", len(c.Options))
+	if len(c.Options) != 3 {
+		t.Fatalf("subcommands = %d, want 3", len(c.Options))
 	}
 	for i, name := range []string{CMD_USER_NAME, CMD_PATCH_NAME} {
 		sub := c.Options[i]
@@ -39,5 +39,29 @@ func TestCommandDefinition(t *testing.T) {
 			t.Errorf("subcommand %q option = %q (type %v, required %v), want required string search-string",
 				name, o.Name, o.Type, o.Required)
 		}
+	}
+}
+
+func TestCommandDefinition_Logout(t *testing.T) {
+	group := commandDefinition().Options[2]
+	if group.Name != CMD_LOGOUT_NAME || group.Type != discordgo.ApplicationCommandOptionSubCommandGroup {
+		t.Fatalf("option 2 = %q (type %v), want subcommand group %q", group.Name, group.Type, CMD_LOGOUT_NAME)
+	}
+	if group.Description == "" {
+		t.Error("group has no description")
+	}
+	if len(group.Options) != 3 {
+		t.Fatalf("logout subcommands = %d, want 3", len(group.Options))
+	}
+	for i, name := range []string{CMD_LOGOUT_SCHEDULE_NAME, CMD_LOGOUT_CANCEL_NAME, CMD_LOGOUT_STATUS_NAME} {
+		sub := group.Options[i]
+		if sub.Name != name || sub.Type != discordgo.ApplicationCommandOptionSubCommand || sub.Description == "" {
+			t.Errorf("logout option %d = %q (type %v), want subcommand %q with a description", i, sub.Name, sub.Type, name)
+		}
+	}
+	schedule := group.Options[0]
+	if len(schedule.Options) != 1 || schedule.Options[0].Name != "time" ||
+		schedule.Options[0].Type != discordgo.ApplicationCommandOptionString || !schedule.Options[0].Required {
+		t.Errorf("schedule options = %+v, want a required string option time", schedule.Options)
 	}
 }

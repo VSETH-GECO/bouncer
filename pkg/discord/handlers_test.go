@@ -10,6 +10,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/model"
+	"github.com/VSETH-GECO/bouncer/internal/freeradius"
 	"github.com/VSETH-GECO/bouncer/internal/jobs"
 	"github.com/VSETH-GECO/bouncer/internal/mac"
 	"github.com/VSETH-GECO/bouncer/internal/switches"
@@ -27,7 +28,7 @@ func TestRequestedVLAN(t *testing.T) {
 		wantVLAN   int
 		wantChange bool
 	}{
-		{controller.CardID{Action: controller.ActionLogout, MAC: m}, logoutVLAN, true},
+		{controller.CardID{Action: controller.ActionLogout, MAC: m}, freeradius.LoginVLAN, true},
 		{controller.CardID{Action: controller.ActionChange, MAC: m, VLAN: 620}, 620, true},
 		{controller.CardID{Action: controller.ActionChange, MAC: m}, 0, true},
 		{controller.CardID{Action: controller.ActionLogin, MAC: m}, 0, true},
@@ -100,7 +101,7 @@ func newFixture(t *testing.T, with499 bool) *fixture {
 		ctx: context.Background(),
 		tx:  store.Tx(),
 		p:   p,
-		d:   &Discord{db: store, dc: controller.NewDiscordController(store)},
+		d:   &Discord{db: store, dc: controller.NewDiscordController(store), logouts: controller.NewLogoutController(store, nil)},
 		m:   m,
 	}
 }

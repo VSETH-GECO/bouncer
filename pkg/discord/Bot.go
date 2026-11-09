@@ -14,13 +14,17 @@ import (
 
 // Discord provides a discord bot interface to this app
 type Discord struct {
-	db controller.Store
-	dc *controller.DiscordController
+	db      controller.Store
+	dc      *controller.DiscordController
+	logouts *controller.LogoutController
 
 	// ctx is the base context for all interaction handlers. discordgo invokes handlers on its own goroutines without a
 	// context, so the run context given to Setup is kept here to cancel handler queries on shutdown.
 	ctx     context.Context
 	session *discordgo.Session
+
+	// mirror posts the log to the log channel; nil until Setup succeeded.
+	mirror *logMirror
 
 	allowedUsers       []string
 	logChannel         string
@@ -29,8 +33,8 @@ type Discord struct {
 	guildId            string
 }
 
-// NewDiscord returns a new discord handler configured by cfg
-func NewDiscord(d *db.DB, cfg config.Discord) *Discord {
+// NewDiscord returns a new discord handler configured by cfg, whose logout commands go through logouts
+func NewDiscord(d *db.DB, cfg config.Discord, logouts *controller.LogoutController) *Discord {
 	obj := &Discord{
 		db:                 d,
 		ctx:                context.Background(),
@@ -40,6 +44,7 @@ func NewDiscord(d *db.DB, cfg config.Discord) *Discord {
 		token:              cfg.Token,
 		guildId:            cfg.GuildID,
 		dc:                 controller.NewDiscordController(d),
+		logouts:            logouts,
 	}
 	return obj
 }
@@ -83,17 +88,21 @@ func (d *Discord) Setup(ctx context.Context) error {
 
 	d.session = session
 	// Everything seems good
-	// Mirror Info and above into the log channel. Close leaves the handler installed; posting after the session is
-	// closed fails and is reported at Debug level.
-	slog.SetDefault(slog.New(newLogHandler(slog.Default().Handler(), session, d.logChannel)))
+	// Mirror Info and above into the log channel. Close leaves the handler installed, but a stopped mirror queues
+	// nothing.
+	handler := newLogHandler(slog.Default().Handler(), session, d.logChannel)
+	handler.mirror.start()
+	d.mirror = handler.mirror
+	slog.SetDefault(slog.New(handler))
 	return nil
 }
 
-// Close closes the discord session, if one was opened by Setup
+// Close stops the log mirror, posting what it has left, and closes the discord session, if one was opened by Setup
 func (d *Discord) Close() error {
 	if d.session == nil {
 		return nil
 	}
+	d.mirror.stop()
 	if err := d.session.Close(); err != nil {
 		return fmt.Errorf("closing discord session: %w", err)
 	}

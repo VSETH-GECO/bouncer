@@ -255,3 +255,77 @@ func TestLatest(t *testing.T) {
 		t.Errorf("LastUpdate = %v, want %v", got.LastUpdate, newer.LastUpdate)
 	}
 }
+
+func TestExists(t *testing.T) {
+	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
+	queued := p.Job()
+	retired := p.Job(func(j *model.BouncerJobs) { j.Retires = jobs.MaxRetries })
+
+	for _, row := range []model.BouncerJobs{queued, retired} {
+		if ok, err := jobs.Exists(ctx, q, int(row.ID)); err != nil || !ok {
+			t.Errorf("Exists(%d) = %v, %v, want true (retries %d)", row.ID, ok, err, row.Retires)
+		}
+	}
+	if err := jobs.Delete(ctx, q, int(queued.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := jobs.Exists(ctx, q, int(queued.ID)); err != nil || ok {
+		t.Errorf("Exists after Delete = %v, %v, want false", ok, err)
+	}
+}
+
+func TestDeletePendingToVLAN(t *testing.T) {
+	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
+	since := time.Date(2026, 11, 1, 15, 0, 0, 0, time.UTC)
+	match := p.Job(func(j *model.BouncerJobs) { j.TargetVLAN, j.LastUpdate = 499, since })
+	older := p.Job(func(j *model.BouncerJobs) { j.TargetVLAN, j.LastUpdate = 499, since.Add(-time.Second) })
+	other := p.Job(func(j *model.BouncerJobs) { j.TargetVLAN, j.LastUpdate = 620, since })
+	dead := p.Job(func(j *model.BouncerJobs) { j.TargetVLAN, j.LastUpdate, j.Retires = 499, since, jobs.MaxRetries })
+
+	n, err := jobs.DeletePendingToVLAN(ctx, q, 499, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("deleted %d jobs, want 1", n)
+	}
+	list, err := jobs.Pending(ctx, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := find(list, int(match.ID)); ok {
+		t.Error("the matching job is still pending")
+	}
+	for _, kept := range []model.BouncerJobs{older, other} {
+		if _, ok := find(list, int(kept.ID)); !ok {
+			t.Errorf("job %d was deleted", kept.ID)
+		}
+	}
+	var left int
+	if err := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM bouncer_jobs WHERE id = ?", dead.ID).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 1 {
+		t.Error("a job out of retries was deleted")
+	}
+}
+
+func TestCountMovesSince(t *testing.T) {
+	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
+	since := time.Date(2026, 11, 1, 15, 0, 0, 0, time.UTC)
+	p.LogEntry(func(l *model.BouncerLog) { l.NewVLAN, l.Date = 499, since })
+	p.LogEntry(func(l *model.BouncerLog) { l.NewVLAN, l.Date = 499, since.Add(time.Minute) })
+	p.LogEntry(func(l *model.BouncerLog) { l.NewVLAN, l.Date = 499, since.Add(-time.Second) })
+	p.LogEntry(func(l *model.BouncerLog) { l.NewVLAN, l.Date = 620, since })
+
+	n, err := jobs.CountMovesSince(ctx, q, 499, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("CountMovesSince = %d, want 2", n)
+	}
+}

@@ -70,7 +70,7 @@ func switchVLANs(s testgen.Switch) []int {
 func otherVLAN(p *testgen.Gen, taken []int) int {
 	for {
 		v := 2 + p.Rand().IntN(4093)
-		if v != loginVLAN && !slices.Contains(taken, v) {
+		if v != freeradius.LoginVLAN && !slices.Contains(taken, v) {
 			return v
 		}
 	}
@@ -187,8 +187,8 @@ func TestRound_StuckClientQueuesBounce(t *testing.T) {
 
 	f.round(t, r)
 	got := f.pending(t)
-	if len(got) != 1 || got[0].TargetVLAN != loginVLAN {
-		t.Fatalf("pending jobs = %+v, want exactly one to VLAN %d", got, loginVLAN)
+	if len(got) != 1 || got[0].TargetVLAN != freeradius.LoginVLAN {
+		t.Fatalf("pending jobs = %+v, want exactly one to VLAN %d", got, freeradius.LoginVLAN)
 	}
 	if d := counterValue(t, stuckBounces) - bounces; d != 1 {
 		t.Errorf("bouncer_stuck_bounces_total grew by %v, want 1", d)
@@ -209,7 +209,7 @@ func TestRound_StuckClientQueuesBounce(t *testing.T) {
 func TestRound_CooldownAfterExhaustedJob(t *testing.T) {
 	f := newFixture(t, 0)
 	exhausted := f.p.Job(func(j *model.BouncerJobs) {
-		j.ClientMAC, j.TargetVLAN, j.Retires = f.client.Hex(), loginVLAN, jobs.MaxRetries
+		j.ClientMAC, j.TargetVLAN, j.Retires = f.client.Hex(), freeradius.LoginVLAN, jobs.MaxRetries
 		j.LastUpdate = time.Now().UTC().Truncate(time.Second)
 	})
 	r := New(f.tx, false)
@@ -231,8 +231,8 @@ func TestRound_CooldownAfterExhaustedJob(t *testing.T) {
 	}
 	f.round(t, r)
 	got := f.pending(t)
-	if len(got) != 1 || got[0].TargetVLAN != loginVLAN || got[0].ID == int(exhausted.ID) {
-		t.Errorf("after the cool-down: pending jobs = %+v, want one new job to VLAN %d", got, loginVLAN)
+	if len(got) != 1 || got[0].TargetVLAN != freeradius.LoginVLAN || got[0].ID == int(exhausted.ID) {
+		t.Errorf("after the cool-down: pending jobs = %+v, want one new job to VLAN %d", got, freeradius.LoginVLAN)
 	}
 }
 
@@ -271,10 +271,10 @@ func TestRound_SkipsUnknownSwitch(t *testing.T) {
 }
 
 func TestRound_SkipsLoginVLAN(t *testing.T) {
-	f := newFixture(t, loginVLAN, func(s *testgen.Switch) {
+	f := newFixture(t, freeradius.LoginVLAN, func(s *testgen.Switch) {
 		for i := range s.VLANs {
-			if s.VLANs[i].VlanID == loginVLAN {
-				s.VLANs[i].VlanID = loginVLAN + 1
+			if s.VLANs[i].VlanID == freeradius.LoginVLAN {
+				s.VLANs[i].VlanID = freeradius.LoginVLAN + 1
 			}
 		}
 	})

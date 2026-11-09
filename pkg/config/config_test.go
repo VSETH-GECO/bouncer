@@ -14,6 +14,7 @@ import (
 var envKeys = []string{
 	"VERBOSE", "DATABASE", "HOST", "USER", "PASSWORD", "PORT", "DTOKEN", "DUSERS", "DLOGCHAN", "DPRIVATECHAN",
 	"DGUILD", "CONFIG", "SWITCH-SECRET", "LEADER-ELECT", "USEPROMETHEUS", "PROMETHEUSPORT", "FORCE", "RECONCILE-DRY-RUN",
+	"LOGOUT-EXEMPT-VLANS",
 }
 
 func clearEnv(t *testing.T) {
@@ -93,6 +94,8 @@ func TestDefaults(t *testing.T) {
 	equal(t, "host", cfg.DB.Host, "")
 	equal(t, "dusers", len(cfg.Discord.Users), 0)
 	equal(t, "switch-secret", cfg.SwitchCOASecret, "")
+	equal(t, "logout-exempt-vlans", len(cfg.Run.LogoutExemptVLANs), 0)
+	cfg.Run.LogoutExemptVLANs = nil
 	equal(t, "run", cfg.Run, Run{LeaderElect: true, Prometheus: true, PrometheusPort: 2112, ReconcileDryRun: true})
 	equal(t, "force", cfg.Migrate.Force, 0)
 }
@@ -199,4 +202,38 @@ func TestReconcileDryRunFlag(t *testing.T) {
 	}
 	cfg = load(t, []string{"--config", path}, nil, nil)
 	equal(t, "reconcile-dry-run from the config file", cfg.Run.ReconcileDryRun, false)
+}
+
+func TestLogoutExemptVLANs(t *testing.T) {
+	clearEnv(t)
+	cfg := load(t, []string{missingConfig(t)}, []string{"--logout-exempt-vlans", "610,620"}, nil)
+	equal(t, "from the flag", cfg.Run.LogoutExemptVLANs, []int{610, 620})
+
+	path := filepath.Join(t.TempDir(), "bouncer.yml")
+	if err := os.WriteFile(path, []byte("logout-exempt-vlans:\n  - 630\n  - 640\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg = load(t, []string{"--config", path}, nil, nil)
+	equal(t, "from the config file", cfg.Run.LogoutExemptVLANs, []int{630, 640})
+
+	t.Setenv("LOGOUT-EXEMPT-VLANS", "650  660")
+	cfg = load(t, []string{missingConfig(t)}, nil, nil)
+	equal(t, "from the environment", cfg.Run.LogoutExemptVLANs, []int{650, 660})
+}
+
+func TestLogoutExemptVLANsRejected(t *testing.T) {
+	for _, value := range []string{"0", "4095", "499", "abc"} {
+		clearEnv(t)
+		t.Setenv("LOGOUT-EXEMPT-VLANS", value)
+		l := NewLoader()
+		root, run := pflag.NewFlagSet("bouncer", pflag.ContinueOnError), pflag.NewFlagSet("run", pflag.ContinueOnError)
+		l.RegisterGlobalFlags(root)
+		l.RegisterRunFlags(run)
+		if err := root.Parse([]string{missingConfig(t)}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := l.Load(); err == nil {
+			t.Errorf("Load with logout-exempt-vlans %q succeeded, want an error", value)
+		}
+	}
 }

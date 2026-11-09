@@ -12,6 +12,8 @@ package table
 func UseSchema(schema string) {
 	BouncerJobs = BouncerJobs.FromSchema(schema)
 	BouncerLog = BouncerLog.FromSchema(schema)
+	BouncerLogout = BouncerLogout.FromSchema(schema)
+	BouncerLogoutApproval = BouncerLogoutApproval.FromSchema(schema)
 	BouncerSwitchIP = BouncerSwitchIP.FromSchema(schema)
 	BouncerSwitchMap = BouncerSwitchMap.FromSchema(schema)
 	BouncerVlan = BouncerVlan.FromSchema(schema)

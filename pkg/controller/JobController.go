@@ -13,6 +13,7 @@ import (
 	"github.com/VSETH-GECO/bouncer/internal/freeradius"
 	"github.com/VSETH-GECO/bouncer/internal/jobs"
 	"github.com/VSETH-GECO/bouncer/internal/kea"
+	"github.com/VSETH-GECO/bouncer/internal/logout"
 	"github.com/VSETH-GECO/bouncer/pkg/radius"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -41,6 +42,10 @@ var (
 	})
 )
 
+// jobRoundBudget is how long a round of the job loop starts new jobs. It is half of the job loop's heartbeat window, so
+// the heartbeat stays fresh however long the queue is.
+const jobRoundBudget = 30 * time.Second
+
 // CoASender sends a RADIUS CoA disconnect request to a switch, forcing the client on the session to reauthenticate.
 // radius.Sender is the real implementation; tests substitute a fake.
 type CoASender interface {
@@ -51,15 +56,19 @@ type JobController struct {
 	db           Store
 	switchSecret string
 	coa          CoASender
+	exemptVLANs  []int
+	now          func() time.Time
 }
 
 // NewJobController returns a controller that processes the job queue in d, sending CoA requests signed with
-// switchSecret through coa.
-func NewJobController(d Store, switchSecret string, coa CoASender) *JobController {
+// switchSecret through coa. A global logout's lockout leaves moves to exemptVLANs alone.
+func NewJobController(d Store, switchSecret string, coa CoASender, exemptVLANs []int) *JobController {
 	return &JobController{
 		db:           d,
 		switchSecret: switchSecret,
 		coa:          coa,
+		exemptVLANs:  exemptVLANs,
+		now:          time.Now,
 	}
 }
 
@@ -71,6 +80,9 @@ func NewJobController(d Store, switchSecret string, coa CoASender) *JobControlle
 // as where the client was kicked from. A closed session is a leftover of an earlier stay, possibly on another switch,
 // and is ignored; a client without an open session gets no CoA and a log row without switch columns, and its switch
 // places it in the new VLAN on its next authentication.
+//
+// During a global logout, the last retry of a move to the login VLAN commits even if its CoA fails, see
+// movesDespiteFailedCoA.
 func (c *JobController) ProcessMoveVLANJob(ctx context.Context, job *jobs.Job) error {
 	// Let's see whether this host can actually be found
 	sessions, err := freeradius.SessionsForMAC(ctx, c.db.Querier(), job.MAC)
@@ -138,7 +150,19 @@ func (c *JobController) ProcessMoveVLANJob(ctx context.Context, job *jobs.Job) e
 			}
 			if err := c.coa.SendDisconnect(ctx, request); err != nil {
 				opsFailedCoA.Inc()
-				return fmt.Errorf("sending CoA: %w", err)
+				moveAnyway, checkErr := c.movesDespiteFailedCoA(ctx, tx, job)
+				if checkErr != nil {
+					return checkErr
+				}
+				if !moveAnyway {
+					return fmt.Errorf("sending CoA: %w", err)
+				}
+				fields := []any{"job.Id", job.ID, "job.ClientMac", job.MAC.Hex(), "switchIP", session.SwitchIP.String()}
+				if session.SwitchPort != nil {
+					fields = append(fields, "switchPort", *session.SwitchPort)
+				}
+				fields = append(fields, "error", err)
+				slog.Warn("Moving a client despite its failed CoA: it stays on its old VLAN until it next re-authenticates", fields...)
 			}
 		}
 
@@ -202,9 +226,13 @@ func (c *JobController) ProcessMoveVLANJob(ctx context.Context, job *jobs.Job) e
 	return nil
 }
 
-// Work processes the work queue once; it is the job loop's round. Only a failure to fetch the queue is returned:
-// a job that fails or panics is logged, its retry counter is bumped and the remaining jobs are still processed.
+// Work processes the work queue once; it is the job loop's round. It stops starting jobs after jobRoundBudget and the
+// next round continues with the rest. Only a failure to fetch the queue is returned: a job that fails or panics is
+// logged, its retry counter is bumped and the remaining jobs are still processed. A job deleted since the round
+// fetched the queue is skipped. A job the global logout's lockout ignores is dropped; a failed lockout lookup fails the
+// round, so no job runs unchecked.
 func (c *JobController) Work(ctx context.Context) error {
+	deadline := c.now().Add(jobRoundBudget)
 	pending, err := jobs.Pending(ctx, c.db.Querier())
 	if err != nil {
 		return fmt.Errorf("fetching pending jobs: %w", err)
@@ -215,6 +243,27 @@ func (c *JobController) Work(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if !c.now().Before(deadline) {
+			slog.Debug("Job round budget used up; continuing next round", "remaining", len(pending)-i)
+			return nil
+		}
+
+		// The list is from the start of the round, and a cancelled global logout deletes its jobs from under it.
+		queued, err := jobs.Exists(ctx, c.db.Querier(), job.ID)
+		if err != nil {
+			return fmt.Errorf("checking that job %d is still queued: %w", job.ID, err)
+		}
+		if !queued {
+			continue
+		}
+		dropped, err := c.dropIfLockedOut(ctx, job)
+		if err != nil {
+			return fmt.Errorf("checking the global logout lockout: %w", err)
+		}
+		if dropped {
+			continue
+		}
+
 		l := slog.With("id", job.ID, "clientMAC", job.RawMAC, "targetVLAN", job.TargetVLAN)
 		l.Info("Processing")
 		opsProcessed.Inc()
@@ -230,7 +279,7 @@ func (c *JobController) Work(ctx context.Context) error {
 			continue
 		}
 
-		err := c.processJob(ctx, job)
+		err = c.processJob(ctx, job)
 		if err == nil {
 			continue
 		}
@@ -259,4 +308,46 @@ func (c *JobController) processJob(ctx context.Context, job *jobs.Job) (err erro
 		}
 	}()
 	return c.ProcessMoveVLANJob(ctx, job)
+}
+
+// dropIfLockedOut deletes job if the global logout's lockout ignores it, and reports whether it did.
+func (c *JobController) dropIfLockedOut(ctx context.Context, job *jobs.Job) (bool, error) {
+	lockout, blocked, err := logout.Blocked(ctx, c.db.Querier(), job.TargetVLAN, job.LastUpdate, c.exemptVLANs)
+	if err != nil || !blocked {
+		return false, err
+	}
+	// The logout's row first, then the job's, the order Cancel locks them in, so the two cannot deadlock.
+	err = c.db.WithTx(ctx, func(tx db.Querier) error {
+		if err := logout.AddIgnoredJob(ctx, tx, lockout.LogoutID); err != nil {
+			return err
+		}
+		return jobs.Delete(ctx, tx, job.ID)
+	})
+	if err != nil {
+		return false, err
+	}
+	logout.IgnoredJobsTotal.Inc()
+	slog.Debug("Global logout lockout dropped a job", "id", job.ID, "clientMAC", job.RawMAC, "targetVLAN", job.TargetVLAN)
+	return true, nil
+}
+
+// movesDespiteFailedCoA reports whether job moves its client although the CoA failed: it is the last retry of a move to
+// the login VLAN during a running global logout. Otherwise a client on an unreachable switch would keep its VLAN and
+// still be logged in when the switch comes back. The client stays physically on its old VLAN until it next
+// re-authenticates, so it is counted.
+func (c *JobController) movesDespiteFailedCoA(ctx context.Context, tx db.Querier, job *jobs.Job) (bool, error) {
+	if job.TargetVLAN != freeradius.LoginVLAN || job.Retries != jobs.MaxRetries-1 {
+		return false, nil
+	}
+	l, err := logout.InFlight(ctx, tx)
+	if errors.Is(err, db.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if l.State != logout.StateRunning {
+		return false, nil
+	}
+	return true, logout.AddCoAFailure(ctx, tx, l.ID)
 }

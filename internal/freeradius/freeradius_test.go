@@ -384,3 +384,26 @@ func TestLatestAccepts_Unparsable(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestAssignments(t *testing.T) {
+	ctx, q := begin(t)
+	p := testgen.Persistent(t, q)
+	a, b := p.MAC(), p.MAC()
+	p.Authorized(a, 620)
+	p.Authorized(b, freeradius.LoginVLAN)
+
+	got, err := freeradius.Assignments(ctx, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{a.Hex(): "620", b.Hex(): strconv.Itoa(freeradius.LoginVLAN)}
+	found := map[string]string{}
+	for _, r := range got {
+		found[r.Username] = r.VLAN
+	}
+	for user, vlan := range want {
+		if found[user] != vlan {
+			t.Errorf("assignment of %s = %q, want %q", user, found[user], vlan)
+		}
+	}
+}

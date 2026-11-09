@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/model"
 	"github.com/VSETH-GECO/bouncer/internal/db/gen/freeradius/table"
 	"github.com/VSETH-GECO/bouncer/internal/mac"
+	"github.com/go-jet/jet/v2/mysql"
 )
 
 // Result is the outcome of a VLAN change. Nil fields are logged as NULL.
@@ -47,4 +49,18 @@ func LogResult(ctx context.Context, q db.Querier, r Result) error {
 		return fmt.Errorf("logging result for %s: %w", r.MAC.Hex(), err)
 	}
 	return nil
+}
+
+// CountMovesSince returns how many moves to vlan bouncer_log recorded at or after since.
+func CountMovesSince(ctx context.Context, q db.Querier, vlan int, since time.Time) (int, error) {
+	var dest struct{ Count int }
+	err := mysql.SELECT(mysql.COUNT(mysql.STAR).AS("count")).
+		FROM(table.BouncerLog).
+		WHERE(table.BouncerLog.NewVLAN.EQ(mysql.Int(int64(vlan))).
+			AND(table.BouncerLog.Date.GT_EQ(mysql.TimestampT(since)))).
+		QueryContext(ctx, q, &dest)
+	if err != nil {
+		return 0, fmt.Errorf("counting moves to VLAN %d: %w", vlan, err)
+	}
+	return dest.Count, nil
 }

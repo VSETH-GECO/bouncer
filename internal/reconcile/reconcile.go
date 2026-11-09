@@ -32,8 +32,6 @@ import (
 )
 
 const (
-	// loginVLAN is the VLAN stuck clients are moved to; from there they reach the login portal.
-	loginVLAN = 499
 	// cooldown is how long after a client's last job (by its last_update) the loop waits before queueing another,
 	// so a client the job loop cannot fix is retried every cooldown and not every round.
 	cooldown = 10 * time.Minute
@@ -168,7 +166,7 @@ func (r *Reconciler) find(ctx context.Context) ([]stuckClient, error) {
 			continue // accepts come newest first; two usernames may spell the same MAC
 		}
 		seen[a.MAC] = struct{}{}
-		if a.AssignedVLAN == 0 || a.AssignedVLAN == loginVLAN {
+		if a.AssignedVLAN == 0 || a.AssignedVLAN == freeradius.LoginVLAN {
 			continue
 		}
 
@@ -236,10 +234,10 @@ func (r *Reconciler) bounce(ctx context.Context, c stuckClient) {
 		return
 	}
 
-	if err := jobs.Create(ctx, r.q, c.mac, loginVLAN); err != nil {
+	if err := jobs.Create(ctx, r.q, c.mac, freeradius.LoginVLAN); err != nil {
 		slog.Warn("Couldn't queue the stuck client's bounce", "clientMAC", c.mac.Hex(), "error", err)
 		return
 	}
 	stuckBounces.Inc()
-	slog.Info(msgQueued, "clientMAC", c.mac.Hex(), "switch", c.sw.Hostname, "vlan", loginVLAN)
+	slog.Info(msgQueued, "clientMAC", c.mac.Hex(), "switch", c.sw.Hostname, "vlan", freeradius.LoginVLAN)
 }

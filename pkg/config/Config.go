@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/VSETH-GECO/bouncer/internal/db"
+	"github.com/VSETH-GECO/bouncer/internal/freeradius"
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -56,6 +58,9 @@ type Run struct {
 	PrometheusPort int  `mapstructure:"prometheusPort"`
 	// ReconcileDryRun makes the reconciliation loop only log the stuck clients instead of queueing their jobs.
 	ReconcileDryRun bool `mapstructure:"reconcile-dry-run"`
+	// LogoutExemptVLANs lists the VLANs a global logout leaves alone: clients on them stay, and moves to them are
+	// processed during its lockout.
+	LogoutExemptVLANs []int `mapstructure:"logout-exempt-vlans"`
 }
 
 // Migrate holds the settings of the migrate command.
@@ -127,6 +132,8 @@ func (l *Loader) RegisterRunFlags(fs *pflag.FlagSet) {
 	l.bind(fs, "prometheusPort")
 	fs.Bool("reconcile-dry-run", true, "Only log the clients the reconciliation loop would bounce to the login VLAN; pass --reconcile-dry-run=false to queue the jobs")
 	l.bind(fs, "reconcile-dry-run")
+	fs.IntSlice("logout-exempt-vlans", nil, "VLANs a global logout leaves alone: clients on them stay, and moves to them are processed during its lockout")
+	l.bind(fs, "logout-exempt-vlans")
 }
 
 // RegisterMigrateFlags registers the migrate command's flags on fs.
@@ -163,17 +170,38 @@ func (l *Loader) Load() (Config, error) {
 	if err := l.v.Unmarshal(&cfg, viper.DecodeHook(hooks)); err != nil {
 		return Config{}, fmt.Errorf("decoding configuration: %w", err)
 	}
+	for _, v := range cfg.Run.LogoutExemptVLANs {
+		if v < 1 || v > 4094 || v == freeradius.LoginVLAN {
+			return Config{}, fmt.Errorf("logout-exempt-vlans: %d is not a VLAN a logout can exempt", v)
+		}
+	}
 	return cfg, nil
 }
 
-// stringToFields decodes a string into a []string by splitting it on whitespace, the way viper's slice getter
-// (cast.ToStringSlice) did before Load used Unmarshal. The deployment passes the Discord user list as one
+// stringToFields decodes a string into a []string or []int by splitting it on whitespace, the way viper's slice getter
+// (cast.ToStringSlice) did before Load used Unmarshal. The deployment passes lists such as the Discord user list as one
 // space-separated environment variable, and Unmarshal alone would split on commas only.
 func stringToFields() mapstructure.DecodeHookFunc {
 	return func(from, to reflect.Type, data any) (any, error) {
-		if from.Kind() != reflect.String || to != reflect.TypeOf([]string(nil)) {
+		if from.Kind() != reflect.String {
 			return data, nil
 		}
-		return strings.Fields(data.(string)), nil
+		switch to {
+		case reflect.TypeOf([]string(nil)):
+			return strings.Fields(data.(string)), nil
+		case reflect.TypeOf([]int(nil)):
+			fields := strings.Fields(data.(string))
+			out := make([]int, 0, len(fields))
+			for _, f := range fields {
+				v, err := strconv.Atoi(f)
+				if err != nil {
+					return nil, fmt.Errorf("parsing %q: %w", f, err)
+				}
+				out = append(out, v)
+			}
+			return out, nil
+		default:
+			return data, nil
+		}
 	}
 }

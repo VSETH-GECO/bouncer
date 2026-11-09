@@ -3,6 +3,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -59,6 +60,22 @@ func Latest(ctx context.Context, q db.Querier, m mac.MAC) (Job, error) {
 		return Job{}, fmt.Errorf("looking up latest job of %s: %w", m.Hex(), db.NotFound(err))
 	}
 	return fromRow(row), nil
+}
+
+// Exists reports whether job id is still in the queue, whatever its retry count.
+func Exists(ctx context.Context, q db.Querier, id int) (bool, error) {
+	var row model.BouncerJobs
+	err := db.NotFound(mysql.SELECT(table.BouncerJobs.ID).
+		FROM(table.BouncerJobs).
+		WHERE(table.BouncerJobs.ID.EQ(mysql.Int(int64(id)))).
+		QueryContext(ctx, q, &row))
+	if errors.Is(err, db.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("looking up job %d: %w", id, err)
+	}
+	return true, nil
 }
 
 // fromRow converts a bouncer_jobs row, leaving MAC zero when the stored value does not parse.
@@ -121,4 +138,22 @@ func SetRetries(ctx context.Context, q db.Querier, id, retries int) error {
 		return fmt.Errorf("updating retry counter of job %d: %w", id, err)
 	}
 	return nil
+}
+
+// DeletePendingToVLAN deletes the pending jobs moving a client to vlan that were last updated at or after since, and
+// returns how many it deleted.
+func DeletePendingToVLAN(ctx context.Context, q db.Querier, vlan int, since time.Time) (int64, error) {
+	res, err := table.BouncerJobs.DELETE().
+		WHERE(table.BouncerJobs.TargetVLAN.EQ(mysql.Int(int64(vlan))).
+			AND(table.BouncerJobs.Retires.LT(mysql.Int(MaxRetries))).
+			AND(table.BouncerJobs.LastUpdate.GT_EQ(mysql.TimestampT(since)))).
+		ExecContext(ctx, q)
+	if err != nil {
+		return 0, fmt.Errorf("deleting pending jobs to VLAN %d: %w", vlan, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("deleting pending jobs to VLAN %d: %w", vlan, err)
+	}
+	return n, nil
 }

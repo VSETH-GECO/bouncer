@@ -34,15 +34,18 @@ const (
 	// reconcileMaxAge is the reconciliation loop's heartbeat window; it is longer than heartbeatMaxAge because the
 	// loop runs less often and a failing round should not restart the leader as quickly.
 	reconcileMaxAge = 5 * time.Minute
+	// logoutInterval is the wait between two rounds of the global logout loop.
+	logoutInterval = 5 * time.Second
 )
 
 // ExecCommand executes the main loop until ctx is cancelled or a component fails. Once ctx is cancelled it returns an
 // error wrapping context.Canceled; main treats that as a clean shutdown.
 //
 // Every replica serves the probes (/healthz, /readyz) and, unless disabled, the metrics and their sampler loop. The
-// leader additionally runs the job loop, the reconciliation loop and the Discord bot; with leader election only the
-// replica holding the Kubernetes lease leads, and losing the lease returns leader.ErrLost, so the process exits and is
-// restarted as a follower. All loops run through the loop runner (see runLoop) and report heartbeats to the probes.
+// leader additionally runs the job loop, the reconciliation loop, the global logout loop and the Discord bot; with
+// leader election only the replica holding the Kubernetes lease leads, and losing the lease returns leader.ErrLost, so
+// the process exits and is restarted as a follower. All loops run through the loop runner (see runLoop) and report
+// heartbeats to the probes.
 func ExecCommand(ctx context.Context, cfg config.Config) error {
 	d, err := db.Open(ctx, cfg.DB.Config())
 	if err != nil {
@@ -126,11 +129,12 @@ func runLoop(ctx context.Context, hb *health.Heartbeat, interval time.Duration, 
 	})
 }
 
-// runLeader runs what only the leading replica may run, the job loop, the reconciliation loop and the Discord bot,
-// until ctx is cancelled or one of them fails. Both loops run through the loop runner (see runLoop): the job loop one
-// round per jobInterval, reporting the "job-loop" heartbeat, and the reconciliation loop one round per
-// reconcileInterval, reporting the "reconcile-loop" heartbeat. The reconciliation loop only logs what it would do
-// while cfg.Run.ReconcileDryRun is set.
+// runLeader runs what only the leading replica may run, the job loop, the reconciliation loop, the global logout loop
+// and the Discord bot, until ctx is cancelled or one of them fails. All three loops run through the loop runner (see
+// runLoop): the job loop one round per jobInterval, reporting the "job-loop" heartbeat, the reconciliation loop one round
+// per reconcileInterval, reporting the "reconcile-loop" heartbeat, and the global logout loop one round per
+// logoutInterval, reporting the "logout-loop" heartbeat. The reconciliation loop only logs what it would do while
+// cfg.Run.ReconcileDryRun is set.
 func runLeader(ctx context.Context, d *db.DB, cfg config.Config, probes *health.Registry) error {
 	metrics.SetLeader(true)
 	defer metrics.SetLeader(false)
@@ -140,10 +144,13 @@ func runLeader(ctx context.Context, d *db.DB, cfg config.Config, probes *health.
 	defer jobLoop.Stop()
 	reconcileLoop := probes.Heartbeat("reconcile-loop", reconcileMaxAge)
 	defer reconcileLoop.Stop()
+	logoutLoop := probes.Heartbeat("logout-loop", heartbeatMaxAge)
+	defer logoutLoop.Stop()
 
 	group, groupCtx := errgroup.WithContext(ctx)
 
-	bot := discord.NewDiscord(d, cfg.Discord)
+	logouts := controller.NewLogoutController(d, cfg.Run.LogoutExemptVLANs)
+	bot := discord.NewDiscord(d, cfg.Discord, logouts)
 	if err := bot.Setup(groupCtx); err != nil {
 		return fmt.Errorf("starting discord bot: %w", err)
 	}
@@ -153,13 +160,16 @@ func runLeader(ctx context.Context, d *db.DB, cfg config.Config, probes *health.
 		}
 	}()
 
-	jobController := controller.NewJobController(d, cfg.SwitchCOASecret, radius.Sender{})
+	jobController := controller.NewJobController(d, cfg.SwitchCOASecret, radius.Sender{}, cfg.Run.LogoutExemptVLANs)
 	group.Go(func() error {
 		return runLoop(groupCtx, jobLoop, jobInterval, jobController.Work)
 	})
 	reconciler := reconcile.New(d.Querier(), cfg.Run.ReconcileDryRun)
 	group.Go(func() error {
 		return runLoop(groupCtx, reconcileLoop, reconcileInterval, reconciler.Round)
+	})
+	group.Go(func() error {
+		return runLoop(groupCtx, logoutLoop, logoutInterval, func(ctx context.Context) error { return logouts.Round(ctx, bot) })
 	})
 
 	return group.Wait()

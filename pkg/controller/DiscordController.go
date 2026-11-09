@@ -98,7 +98,7 @@ func (dc *DiscordController) GetDiscordUserCard(ctx context.Context, searchStrin
 	} else if err != nil {
 		return nil, fmt.Errorf("checking whether user %s is signed in: %w", user.MAC, err)
 	}
-	if vlan > 0 && vlan != 499 {
+	if vlan > 0 && vlan != freeradius.LoginVLAN {
 		loggedIn = "✅"
 	} else {
 		loggedIn = "❌"
@@ -258,7 +258,7 @@ func (dc *DiscordController) assembleActions(ctx context.Context, card *UserCard
 
 	// Actions!
 	var actions []discordgo.MessageComponent
-	if vlan > 0 && vlan != 499 {
+	if vlan > 0 && vlan != freeradius.LoginVLAN {
 		// User is logged in ... so we can log them out or change their VLAN
 		slog.Debug("adding 'logout button' to action menu")
 		actions = append(actions, discordgo.Button{

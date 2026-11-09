@@ -226,3 +226,40 @@ func TestTxStore_CancelledContext(t *testing.T) {
 		t.Errorf("transaction unusable after a cancelled WithTx: %v", err)
 	}
 }
+
+// TestLockLogouts checks that the lock is held for the test's life and released when the test ends.
+func TestLockLogouts(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	// tryLock takes and releases the lock on a connection of its own, waiting up to seconds, and reports whether it
+	// got it.
+	tryLock := func(t *testing.T, seconds int) bool {
+		t.Helper()
+		conn, err := testdb.Shared(t).SQL().Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		var got sql.NullInt64
+		if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK('bouncer_logout_tests', ?)", seconds).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Int64 != 1 {
+			return false
+		}
+		if err := conn.QueryRowContext(ctx, "SELECT RELEASE_LOCK('bouncer_logout_tests')").Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		return true
+	}
+
+	t.Run("held", func(t *testing.T) {
+		testdb.LockLogouts(t)
+		if tryLock(t, 0) {
+			t.Error("another connection got the lock while the test held it")
+		}
+	})
+	if !tryLock(t, 60) {
+		t.Error("the lock was not released when the test ended")
+	}
+}

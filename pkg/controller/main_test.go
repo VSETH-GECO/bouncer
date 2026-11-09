@@ -14,6 +14,9 @@ import (
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
 
+// harnessExemptVLAN is the VLAN the harness's JobController exempts from a global logout.
+const harnessExemptVLAN = 630
+
 // fakeCoA records every CoA request instead of sending it.
 type fakeCoA struct {
 	calls []radius.CoARequest
@@ -32,13 +35,14 @@ func (f *fakeCoA) SendDisconnect(_ context.Context, req radius.CoARequest) error
 // is rolled back when the test ends: the controllers get a testdb.TxStore over it, so their WithTx becomes a savepoint
 // that a failing job rolls back to, and nothing is ever committed.
 type harness struct {
-	t   *testing.T
-	ctx context.Context
-	tx  *sql.Tx
-	p   *testgen.Gen
-	coa *fakeCoA
-	c   *JobController
-	dc  *DiscordController
+	t     *testing.T
+	ctx   context.Context
+	tx    *sql.Tx
+	store *testdb.TxStore
+	p     *testgen.Gen
+	coa   *fakeCoA
+	c     *JobController
+	dc    *DiscordController
 }
 
 func newHarness(t *testing.T) *harness {
@@ -47,13 +51,14 @@ func newHarness(t *testing.T) *harness {
 	store := testdb.NewTxStore(tx)
 	fake := &fakeCoA{}
 	return &harness{
-		t:   t,
-		ctx: context.Background(),
-		tx:  tx,
-		p:   testgen.Persistent(t, tx),
-		coa: fake,
-		c:   NewJobController(store, "secret", fake),
-		dc:  NewDiscordController(store),
+		t:     t,
+		ctx:   context.Background(),
+		tx:    tx,
+		store: store,
+		p:     testgen.Persistent(t, tx),
+		coa:   fake,
+		c:     NewJobController(store, "secret", fake, []int{harnessExemptVLAN}),
+		dc:    NewDiscordController(store),
 	}
 }
 

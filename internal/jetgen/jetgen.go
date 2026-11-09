@@ -18,6 +18,8 @@ import (
 var Tables = []string{
 	"bouncer_jobs",
 	"bouncer_log",
+	"bouncer_logout",
+	"bouncer_logout_approval",
 	"bouncer_switch_ip",
 	"bouncer_switch_map",
 	"bouncer_vlan",

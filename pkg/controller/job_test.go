@@ -558,3 +558,38 @@ func TestWork_PanickingJobBumpsRetries(t *testing.T) {
 		t.Errorf("B AssignedVLAN = %d, want 30", v)
 	}
 }
+
+func TestWork_StopsAtRoundBudget(t *testing.T) {
+	h := newHarness(t)
+	a, b := h.client(), h.client()
+	h.queue(a, 20)
+	h.queue(b, 30)
+	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	h.c.now = func() time.Time {
+		calls++
+		if calls <= 2 { // the deadline and the check before the first job
+			return start
+		}
+		return start.Add(jobRoundBudget)
+	}
+
+	if err := h.c.Work(h.ctx); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if v := h.vlan(a); v != 20 {
+		t.Errorf("A AssignedVLAN = %d, want 20", v)
+	}
+	j := h.mustPending(b)
+	if j.Retries != 0 {
+		t.Errorf("job B Retries = %d, want 0: running out of budget is not a failed attempt", j.Retries)
+	}
+
+	h.c.now = func() time.Time { return start }
+	if err := h.c.Work(h.ctx); err != nil {
+		t.Fatalf("second Work: %v", err)
+	}
+	if v := h.vlan(b); v != 30 {
+		t.Errorf("B AssignedVLAN = %d, want 30 after the next round", v)
+	}
+}

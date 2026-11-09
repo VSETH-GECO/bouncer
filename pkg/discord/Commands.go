@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 
@@ -17,14 +18,18 @@ import (
 )
 
 const (
-	CMD_ROOT_NAME  = "net"
-	CMD_USER_NAME  = "user"
-	CMD_PATCH_NAME = "patch"
+	CMD_ROOT_NAME            = "net"
+	CMD_USER_NAME            = "user"
+	CMD_PATCH_NAME           = "patch"
+	CMD_LOGOUT_NAME          = "logout"
+	CMD_LOGOUT_SCHEDULE_NAME = "schedule"
+	CMD_LOGOUT_CANCEL_NAME   = "cancel"
+	CMD_LOGOUT_STATUS_NAME   = "status"
 )
 
 // commandDefinition returns the application command tree the bot registers: the root command with the user and
-// patch subcommands, each taking a required search string. It is hidden from everyone but administrators (default
-// member permissions 0) and unavailable in DMs.
+// patch subcommands, each taking a required search string, and the logout group with its schedule, cancel and status
+// subcommands. It is hidden from everyone but administrators (default member permissions 0) and unavailable in DMs.
 func commandDefinition() *discordgo.ApplicationCommand {
 	dmPermission := false
 	var defaultMemberPermissions int64 = 0
@@ -55,6 +60,36 @@ func commandDefinition() *discordgo.ApplicationCommand {
 				Name:        CMD_PATCH_NAME,
 				Description: "Finds an user by name, email, mac or current ip and enters a new patch job into the database",
 				Options:     searchOption(),
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommandGroup,
+				Name:        CMD_LOGOUT_NAME,
+				Description: "Schedules, cancels or shows a global logout of all clients",
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionSubCommand,
+						Name:        CMD_LOGOUT_SCHEDULE_NAME,
+						Description: "Schedules a global logout; a second admin has to schedule the same time",
+						Options: []*discordgo.ApplicationCommandOption{
+							{
+								Type:        discordgo.ApplicationCommandOptionString,
+								Name:        "time",
+								Description: "In UTC: 15:00 for today, or 2026-11-01 15:00",
+								Required:    true,
+							},
+						},
+					},
+					{
+						Type:        discordgo.ApplicationCommandOptionSubCommand,
+						Name:        CMD_LOGOUT_CANCEL_NAME,
+						Description: "Cancels the global logout in flight",
+					},
+					{
+						Type:        discordgo.ApplicationCommandOptionSubCommand,
+						Name:        CMD_LOGOUT_STATUS_NAME,
+						Description: "Shows the global logout in flight",
+					},
+				},
 			},
 		},
 	}
@@ -105,11 +140,16 @@ const (
 	msgUnknownInteraction = "Unknown interaction request - this could be a bug"
 	msgCardUpdateFailed   = "User card update failed - check logs for more details"
 	msgVLANChangeQueued   = "**VLAN change queued**"
+	msgVLANChangeIgnored  = "**VLAN change ignored:** a global logout ignores moves until %s UTC"
 	msgVLANChangeFailed   = "***VLAN change failed!***"
 )
 
-// logoutVLAN is the VLAN a client is moved to when it is logged out.
-const logoutVLAN = 499
+// lockedOutError reports a VLAN change that a global logout's lockout would drop.
+type lockedOutError struct{ until time.Time }
+
+func (e *lockedOutError) Error() string {
+	return "global logout lockout until " + e.until.UTC().Format(time.RFC3339)
+}
 
 // userCommandResponse answers the user and patch subcommands: it looks up the client matching search and shows its
 // card, the long one with enabled controls for the patch command. what names the reply in the log.
@@ -173,7 +213,7 @@ func selectedVLAN(values []string) (int, error) {
 func requestedVLAN(id controller.CardID) (vlan int, change bool) {
 	switch id.Action {
 	case controller.ActionLogout:
-		return logoutVLAN, true
+		return freeradius.LoginVLAN, true
 	case controller.ActionChange, controller.ActionLogin:
 		// Both carry the VLAN chosen in the menu, 0 if none was chosen.
 		return id.VLAN, true
@@ -188,7 +228,10 @@ func (d *Discord) cardButtonResponse(ctx context.Context, id controller.CardID) 
 	message := ""
 	if vlan, change := requestedVLAN(id); change {
 		message = msgVLANChangeQueued
-		if err := d.queueVLANChange(ctx, id.MAC, vlan); err != nil {
+		var locked *lockedOutError
+		if err := d.queueVLANChange(ctx, id.MAC, vlan); errors.As(err, &locked) {
+			message = fmt.Sprintf(msgVLANChangeIgnored, locked.until.UTC().Format("15:04"))
+		} else if err != nil {
 			slog.Warn("VLAN change request failed", "error", err, "mac", id.MAC, "targetVLAN", vlan)
 			message = msgVLANChangeFailed
 		}
@@ -204,7 +247,8 @@ func (d *Discord) cardButtonResponse(ctx context.Context, id controller.CardID) 
 }
 
 // queueVLANChange validates the requested VLAN against the VLANs of the switch the client is connected to and queues
-// a job moving the client there. 0 or a VLAN unknown to the switch selects the switch's primary VLAN.
+// a job moving the client there. 0 or a VLAN unknown to the switch selects the switch's primary VLAN. It returns a
+// *lockedOutError, creating no job, if a global logout's lockout would drop the move.
 func (d *Discord) queueVLANChange(ctx context.Context, m mac.MAC, vlan int) error {
 	sessions, err := freeradius.SessionsForMAC(ctx, d.db.Querier(), m)
 	if err != nil {
@@ -220,6 +264,13 @@ func (d *Discord) queueVLANChange(ctx context.Context, m mac.MAC, vlan int) erro
 	vlan, err = resolveVLAN(switchRef, vlan)
 	if err != nil {
 		return err
+	}
+	until, blocked, err := d.logouts.VLANChangeBlocked(ctx, vlan)
+	if err != nil {
+		return err
+	}
+	if blocked {
+		return &lockedOutError{until: until}
 	}
 	if err := d.dc.ChangeUserVLAN(ctx, m, vlan); err != nil {
 		return fmt.Errorf("queueing vlan change to %d: %w", vlan, err)
@@ -275,10 +326,14 @@ func (d *Discord) setupHandlers(s *discordgo.Session) error {
 			} else if i.ApplicationCommandData().Name == CMD_ROOT_NAME && i.ApplicationCommandData().Options[0].Name == CMD_PATCH_NAME {
 				// We're supposed to patch someone!
 				d.handleUserSubcommand(s, i, true)
+			} else if i.ApplicationCommandData().Name == CMD_ROOT_NAME && i.ApplicationCommandData().Options[0].Name == CMD_LOGOUT_NAME {
+				d.handleLogoutCommand(s, i)
 			}
 		} else if i.Type == discordgo.InteractionMessageComponent {
 			if strings.HasPrefix(i.Interaction.MessageComponentData().CustomID, "find") {
 				d.handleCardComponent(s, i)
+			} else if strings.HasPrefix(i.Interaction.MessageComponentData().CustomID, logoutCancelPrefix) {
+				d.handleLogoutCancelButton(s, i)
 			}
 		}
 	})

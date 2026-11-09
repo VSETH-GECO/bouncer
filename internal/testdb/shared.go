@@ -142,3 +142,33 @@ func Tx(t *testing.T) *sql.Tx {
 	})
 	return tx
 }
+
+// LockLogouts makes the test the only one, across all packages of the `go test` run, holding a bouncer_logout row until
+// it ends. Transactions inserting an in-flight logout wait for each other on in_flight's unique index, and when the
+// first of three rolls back, InnoDB deadlocks the other two, which would fail unrelated tests at random.
+//
+// Call it before Tx or Store, so that the lock is released after the transaction's rollback.
+func LockLogouts(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := Shared(t).SQL().Conn(ctx)
+	if err != nil {
+		t.Fatalf("testdb: getting a connection for the logout lock: %v", err)
+	}
+	var got sql.NullInt64
+	if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK('bouncer_logout_tests', 300)").Scan(&got); err != nil {
+		t.Fatalf("testdb: taking the logout lock: %v", err)
+	}
+	if got.Int64 != 1 {
+		t.Fatal("testdb: timed out waiting for the logout lock")
+	}
+	t.Cleanup(func() {
+		// Closing only returns the connection to the pool, where the session would keep its lock.
+		if err := conn.QueryRowContext(ctx, "SELECT RELEASE_LOCK('bouncer_logout_tests')").Scan(&got); err != nil {
+			t.Errorf("testdb: releasing the logout lock: %v", err)
+		}
+		if err := conn.Close(); err != nil {
+			t.Errorf("testdb: closing the logout lock's connection: %v", err)
+		}
+	})
+}
